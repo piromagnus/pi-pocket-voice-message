@@ -14,7 +14,10 @@ const { cleanUp, newSession, openApp, owner, root, scriptedModel, until } = awai
 const { Browsers } = await import(pathToFileURL(join(PI_POCKET, "src/server/browser.ts")).href);
 const { createHandler } = await import(pathToFileURL(join(PI_POCKET, "src/server/http.ts")).href);
 
-test("local voice: real French audio, draft only, cancellation, access, errors and mobile", async () => {
+const REFERENCE =
+    "Premièrement, la plupart des cavaliers portent des bottes d'équitation avec un talon et une semelle lisse et assez étroite.";
+
+test("voice: record straight into the message box, draft only, settings, cancellation, mobile", async () => {
     const dropIns = join(root, "data", "extensions");
 
     mkdirSync(dropIns, { recursive: true });
@@ -42,24 +45,29 @@ test("local voice: real French audio, draft only, cancellation, access, errors a
         const base = `http://127.0.0.2:${(server.address() as { port: number }).port}`;
         const page = await browsers.open(1);
         const run = async (script: string) => JSON.parse(await page.evaluate(script));
-        const has = (selector: string) =>
-            run(`return JSON.stringify(!!document.querySelector(${JSON.stringify(selector)}));`);
-        const wait = (selector: string) => until(() => has(selector), selector);
+        const has = async (selector: string) =>
+            (await run(
+                `return JSON.stringify(!!document.querySelector(${JSON.stringify(selector)}));`,
+            )) === true;
+        const wait = (selector: string) => until(async () => await has(selector), selector);
+        const bodyHas = async (text: string) =>
+            (await run(
+                `return JSON.stringify(document.body.textContent.includes(${JSON.stringify(text)}));`,
+            )) === true;
+        const says = (text: string) => until(async () => await bodyHas(text), `page says ${text}`);
+        const gone = (text: string) =>
+            until(async () => !(await bodyHas(text)), `page no longer says ${text}`);
         const settle = () => new Promise((resolve) => setTimeout(resolve, 650));
-        const begin = async () => {
+        const tap = async (title: string) => {
+            await wait(`[title=${JSON.stringify(title)}]`);
             await run(
-                `document.querySelector('[title="Dicter un message"]').click(); return "null";`,
+                `document.querySelector('[title=${JSON.stringify(title)}]').click(); return "null";`,
             );
-            await wait("#voice-message-text");
-            await settle();
-            await button("Enregistrer");
-            await settle();
         };
-        const button = (text: string) =>
-            run(`
-            [...document.querySelectorAll('.voice-message button')].find(b => b.textContent.trim() === ${JSON.stringify(text)}).click();
-            return "null";
-        `);
+        const notices = () =>
+            run(
+                'return JSON.stringify([...document.querySelectorAll(".notice")].map((n) => n.textContent.trim()));',
+            );
         const wav = readFileSync(join(source, "_voice-message", "fixtures", "french.wav")).toString(
             "base64",
         );
@@ -99,14 +107,12 @@ test("local voice: real French audio, draft only, cancellation, access, errors a
         await page.navigate(
             `${base}/login?token=${encodeURIComponent(app.config.ownerToken)}&next=/s/${session}`,
         );
-        await wait('[title="Dicter un message"]');
+        await wait('[title="Dictate a message"]');
         await run(`
             localStorage.setItem('x.voice-message.engine', 'local');
             globalThis.recorders = [];
             globalThis.tracks = [];
-            globalThis.pendingPermission = null;
             globalThis.denyMicrophone = false;
-            globalThis.delayPermission = false;
             globalThis.posted = [];
             const originalFetch = fetch;
             globalThis.fetch = (url, init) => {
@@ -116,10 +122,9 @@ test("local voice: real French audio, draft only, cancellation, access, errors a
             const sample = Uint8Array.from(atob(${JSON.stringify(wav)}), c => c.charCodeAt(0));
             Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { configurable: true, value: () => {
                 if (denyMicrophone) return Promise.reject(new DOMException('denied', 'NotAllowedError'));
-                const track = { stopped: false, stop() { this.stopped = true; } };
+                const track = { stopped: false, readyState: 'live', stop() { this.stopped = true; this.readyState = 'ended'; } };
                 tracks.push(track);
-                const stream = { getTracks: () => [track] };
-                return delayPermission ? new Promise(resolve => { pendingPermission = () => resolve(stream); }) : Promise.resolve(stream);
+                return Promise.resolve({ getTracks: () => [track] });
             }});
             globalThis.MediaRecorder = class {
                 static isTypeSupported() { return true; }
@@ -133,125 +138,122 @@ test("local voice: real French audio, draft only, cancellation, access, errors a
             const { store } = await import('/store.js');
             globalThis.testStore = store;
             const field = document.querySelector('.composer textarea');
-            field.value = 'Brouillon existant';
+            field.value = 'Existing draft';
             field.dispatchEvent(new Event('input', { bubbles: true }));
             return "null";
         `);
-        await begin();
-        assert.equal(await run("return JSON.stringify(recorders.at(-1).state);"), "recording");
         assert.equal(
             await run("return JSON.stringify(document.documentElement.scrollWidth <= innerWidth);"),
             true,
         );
-        await button("Arrêter");
+
+        // One tap records, without any popup; the status line says so.
+        await tap("Dictate a message");
+        assert.equal(await run("return JSON.stringify(recorders.at(-1).state);"), "recording");
+        await says("Recording…");
+        assert.equal(await has(".voice-settings"), false);
+        // A second tap stops, and the transcript lands in the message box itself, to edit and send by hand.
+        await tap("Stop dictation");
         assert.equal(await run("return JSON.stringify(tracks.at(-1).stopped);"), true);
+        await says("Transcribing…");
         await until(
             async () =>
-                await run(
-                    'return JSON.stringify(posted.some(url => url.endsWith("/transcribe")));',
-                ),
-            "transcription requested",
-        );
-        await settle();
-        assert.equal((await request({ audio: wav, mimeType: "audio/wav" })).status, 429);
-        await until(
-            async () =>
-                await run(
-                    'return JSON.stringify([...document.querySelectorAll(".voice-message button")].some(b => b.textContent.trim() === "Insérer"));',
-                ),
-            "real local transcription",
+                (await run(
+                    'return JSON.stringify(document.querySelector(".composer textarea").value);',
+                )) === `Existing draft ${REFERENCE}`,
+            "the transcript in the message box",
             30_000,
         );
         assert.equal(
-            await run(
-                'return JSON.stringify(document.querySelector("#voice-message-text").value);',
-            ),
-            "Premièrement, la plupart des cavaliers portent des bottes d'équitation avec un talon et une semelle lisse et assez étroite.",
-        );
-        await until(
-            async () =>
-                await run(
-                    'return JSON.stringify([...document.querySelectorAll(".voice-message p")].some((p) => /whisper-(large-v3-turbo|small)/.test(p.textContent)));',
-                ),
-            "model footer",
-        );
-        await run(
-            'const field = document.querySelector("#voice-message-text"); field.value = "Message corrigé"; field.dispatchEvent(new Event("input", { bubbles: true })); return "null";',
-        );
-        await settle();
-        await button("Insérer");
-        await until(async () => !(await has("#voice-message-text")), "sheet closed");
-        assert.equal(
             await run('return JSON.stringify(document.querySelector(".composer textarea").value);'),
-            "Brouillon existant Message corrigé",
+            `Existing draft ${REFERENCE}`,
         );
+        await gone("Transcribing…");
+        await wait('[title="Dictate a message"]');
+        assert.equal(await run("return JSON.stringify(testStore.state.view.live.busy);"), false);
         assert.equal(
             await run(
-                'return JSON.stringify(posted.every(url => url.endsWith("/transcribe") || url.endsWith("/typing")));',
+                'return JSON.stringify(posted.every((url) => url.endsWith("/transcribe") || url.endsWith("/typing")));',
             ),
             true,
-            await run("return JSON.stringify(posted);"),
         );
-        assert.equal(await run("return JSON.stringify(testStore.state.view.live.busy);"), false);
 
+        // Recording into one conversation, then opening another: nothing is inserted anywhere.
         await settle();
-        await begin();
-        await button("Annuler");
-        await until(async () => !(await has("#voice-message-text")), "cancel closed");
-        assert.equal(await run("return JSON.stringify(tracks.at(-1).stopped);"), true);
-        assert.equal(
-            await run('return JSON.stringify(document.querySelector(".composer textarea").value);'),
-            "Brouillon existant Message corrigé",
-        );
-        await settle();
-        await begin();
+        await tap("Dictate a message");
         await run(
             `const { navigate } = await import('/store.js'); navigate(${other}); return "null";`,
         );
-        await until(async () => !(await has("#voice-message-text")), "navigation closes recording");
-        await settle();
-        assert.equal(await run("return JSON.stringify(tracks.at(-1).stopped);"), true);
-
-        await run('globalThis.delayPermission = true; return "null";');
-        await begin();
-        await button("Annuler");
-        await settle();
-        await run('pendingPermission(); globalThis.delayPermission = false; return "null";');
+        await tap("Stop dictation");
         await until(
-            async () => await run("return JSON.stringify(tracks.at(-1).stopped);"),
-            "late permission releases mic",
+            async () => (await notices()).length > 0,
+            "a warning about the conversation",
+            30_000,
         );
-        await run('globalThis.denyMicrophone = true; return "null";');
-        await begin();
-        await wait('.voice-message [role="alert"]');
-        assert.match(
-            await run(
-                'return JSON.stringify(document.querySelector(".voice-message [role=alert]").textContent);',
-            ),
-            /Autorise le microphone/,
+        assert.match(JSON.stringify(await notices()), /The conversation changed/);
+        assert.equal(
+            await run('return JSON.stringify(document.querySelector(".composer textarea").value);'),
+            "",
         );
-        await button("Annuler");
-        await settle();
-        await run('globalThis.denyMicrophone = false; return "null";');
 
-        await begin();
-        await button("Arrêter");
-        await button("Annuler");
+        // A blocked microphone says so, and the button comes back.
         await settle();
-        // A cancelled worker must release the single-request lock.
+        await run('globalThis.denyMicrophone = true; return "null";');
+        await tap("Dictate a message");
+        await until(async () => (await notices()).length > 0, "a microphone warning");
+        assert.match(JSON.stringify(await notices()), /Allow the microphone/);
+        await run('globalThis.denyMicrophone = false; return "null";');
+        await settle();
+
+        // Audio settings, from the menu: the engine choice of this browser.
+        await run(`document.querySelector('.topbar [aria-label="Menu"]').click(); return "null";`);
         await until(
             async () =>
-                (
-                    await request({
-                        audio: Buffer.alloc(32, 65).toString("base64"),
-                        mimeType: "audio/wav",
-                    })
-                ).status === 400,
-            "cancel releases worker",
+                await run(
+                    'return JSON.stringify([...document.querySelectorAll("button")].some((b) => b.textContent.includes("Audio settings")));',
+                ),
+            "the Audio settings row",
         );
-        await begin();
+        await run(`
+            [...document.querySelectorAll("button")].find((b) => b.textContent.includes("Audio settings")).click();
+            return "null";
+        `);
+        await wait(".voice-settings");
+        assert.equal(
+            await run(
+                'return JSON.stringify(document.querySelector(".voice-settings select").value);',
+            ),
+            "local",
+        );
+        await run(`
+            const select = document.querySelector('.voice-settings select');
+            select.value = 'mistral';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return "null";
+        `);
+        await until(
+            async () =>
+                await run('return JSON.stringify(localStorage.getItem("x.voice-message.engine"));'),
+            "the engine saved",
+        );
+        assert.equal(
+            await run('return JSON.stringify(localStorage.getItem("x.voice-message.engine"));'),
+            "mistral",
+        );
+        await run(`localStorage.setItem('x.voice-message.engine', 'local'); return "null";`);
+        await run(
+            `document.querySelector('.sheet-close, [aria-label="Close"]')?.click(); return "null";`,
+        );
+        await settle();
+
+        // Turning the extension off mid-recording stops the microphone.
+        await tap("Dictate a message");
+        assert.equal(await run("return JSON.stringify(recorders.at(-1).state);"), "recording");
         await app.setExtensionEnabled(owner(app), "voice-message.ts", false);
-        await until(async () => !(await has('[title="Dicter un message"]')), "extension removed");
+        await until(
+            async () => !(await has('[title="Dictate a message"]')),
+            "the extension removed",
+        );
         assert.equal(await run("return JSON.stringify(tracks.at(-1).stopped);"), true);
     } finally {
         await browsers.closeAll({ final: true });

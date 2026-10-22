@@ -2,106 +2,108 @@ export const pocketApi = 1;
 
 const MIC =
     "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8";
-const MAX_BYTES = 700_000;
+const STOP = "M7 7h10v10H7z";
 const ENGINE_KEY = "x.voice-message.engine";
-const PHASE = {
-    idle: "Message",
-    permission: "Autorise le microphone…",
-    recording: "Enregistrement en cours…",
-    transcribing: "Transcription en cours…",
-    ready: "Message",
-    error: "Message",
+const MAX_BYTES = 700_000;
+const MAX_MS = 300_000;
+const ABOUT = {
+    mistral: "Your recording goes to Mistral's official API — $0.0035/min on your API credits.",
+    local: "Your recording is transcribed on this server: a GPU model when available, otherwise a small CPU model.",
 };
+
+/** The engine this browser uses, as Audio settings chose it. */
+const engine = () => (localStorage.getItem(ENGINE_KEY) === "local" ? "local" : "mistral");
 
 export default function setup(pocket) {
     const { html, useEffect, useState } = pocket;
-    let current = null;
+    let session = null;
+    let button = null;
+    let status = null;
 
     if (typeof pocket.composerButton !== "function" || typeof pocket.insertText !== "function") {
-        throw new Error("La dictée nécessite Pi Pocket 0.19 ou une version plus récente.");
+        throw new Error("Voice dictation needs Pi Pocket 0.19 or newer.");
     }
 
-    const snapshot = (session) => ({
-        text: session.text,
-        phase: session.phase,
-        error: session.error,
-        engine: session.engine,
-        model: session.model,
-    });
-    const publish = (session) => session.changed?.(snapshot(session));
+    /** The mic button and the status line say what is going on. */
+    const idle = () => {
+        button?.update({ title: "Dictate a message", iconPath: MIC });
+        status?.remove();
+        status = null;
+    };
+    const busy = (phase, text) => {
+        button?.update({
+            title: phase === "recording" ? "Stop dictation" : "Transcribing…",
+            iconPath: phase === "recording" ? STOP : MIC,
+        });
+        status?.update({ text });
+        status ??= pocket.status({
+            id: "dictation",
+            text,
+            short: "voice",
+            title: "Voice dictation",
+            tone: "muted",
+        });
+    };
 
-    function release(session) {
-        clearTimeout(session.timer);
-        session.stream?.getTracks().forEach((track) => track.stop());
-        session.stream = null;
-    }
+    const release = (each) => {
+        clearTimeout(each.timer);
+        each.stream?.getTracks().forEach((track) => track.stop());
+        each.stream = null;
+    };
 
-    function cancel(session) {
+    const reset = () => {
+        session = null;
+        idle();
+    };
+
+    /** Drop everything without a word: closing, turning off, navigating away. */
+    const cancel = () => {
         if (!session) {
             return;
         }
 
-        session.alive = false;
-        session.changed = null;
-        session.request.abort();
+        const each = session;
 
-        if (session.recorder) {
-            session.recorder.onstop = null;
-            session.recorder.ondataavailable = null;
-            session.recorder.onerror = null;
+        session = null;
+        each.request.abort();
 
-            if (session.recorder.state !== "inactive") {
-                session.recorder.stop();
-            }
+        if (each.recorder && each.recorder.state !== "inactive") {
+            each.recorder.onstop = null;
+            each.recorder.ondataavailable = null;
+            each.recorder.stop();
         }
 
-        release(session);
-        session.chunks = [];
+        release(each);
+        idle();
+    };
 
-        if (current === session) {
-            current = null;
-        }
-    }
+    /** The transcript lands in the message box, ready to edit and send by hand. */
+    const insert = (each, text) => {
+        if (pocket.conversationId() !== each.conversationId || pocket.me()?.id !== each.personId) {
+            pocket.notify("warning", "The conversation changed; the dictation was not inserted.");
 
-    function fail(session, message) {
-        if (!session.alive) {
             return;
         }
 
-        if (session.recorder) {
-            session.recorder.onstop = null;
-
-            if (session.recorder.state !== "inactive") {
-                session.recorder.stop();
-            }
+        if (text) {
+            pocket.insertText(text, { inline: true });
+        } else {
+            pocket.notify("warning", "No speech recognized.");
         }
+    };
 
-        release(session);
-        session.chunks = [];
-        session.phase = "error";
-        session.error = message;
-        publish(session);
-    }
-
-    async function transcribe(session) {
-        release(session);
-
-        if (!session.alive || session.phase === "error") {
-            return;
-        }
-
-        session.phase = "transcribing";
-        publish(session);
+    async function transcribe(each) {
+        release(each);
+        each.phase = "transcribing";
+        busy("transcribing", "Transcribing…");
 
         try {
-            const blob = new Blob(session.chunks, { type: session.recorder.mimeType });
+            const blob = new Blob(each.chunks, { type: each.recorder.mimeType });
 
-            session.chunks = [];
+            each.chunks = [];
 
             if (!blob.size || blob.size > MAX_BYTES) {
-                throw new Error(
-                    "Enregistrement vide ou trop volumineux. Dicte un message plus court.",
-                );
+                throw new Error("The recording is empty or too large. Try a shorter message.");
             }
 
             const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -111,56 +113,55 @@ export default function setup(pocket) {
                 parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 8192)));
             }
 
-            if (!session.alive) {
-                return;
-            }
-
             const result = await pocket.api(
                 "transcribe",
-                { audio: btoa(parts.join("")), mimeType: blob.type, engine: session.engine },
-                { signal: session.request.signal },
+                { audio: btoa(parts.join("")), mimeType: blob.type, engine: each.engine },
+                { signal: each.request.signal },
             );
 
-            if (!session.alive) {
+            if (session !== each) {
                 return;
             }
 
-            if (typeof result.text !== "string" || result.text.length > 100_000) {
-                throw new Error("Le moteur vocal n’a pas fourni de texte valide.");
+            if (typeof result?.text !== "string" || result.text.length > 100_000) {
+                throw new Error("The transcription engine returned no valid text.");
             }
 
-            session.text = result.text.trim();
-            session.model =
-                typeof result.model === "string" && typeof result.device === "string"
-                    ? `${result.model} · ${result.device}`
-                    : typeof result.model === "string"
-                      ? result.model
-                      : "";
-            session.phase = "ready";
-            session.error = session.text
-                ? ""
-                : "Aucune parole reconnue. Ferme cette fenêtre et réessaie.";
-            publish(session);
+            insert(each, result.text.trim());
         } catch (error) {
-            fail(session, error.message || "La transcription a échoué.");
+            if (session === each && !each.request.signal.aborted) {
+                pocket.notify("error", error.message || "The transcription failed.");
+            }
+        } finally {
+            if (session === each) {
+                reset();
+            }
         }
     }
 
-    function stop(session) {
-        if (session.recorder?.state === "recording") {
-            session.phase = "transcribing";
-            publish(session);
-            session.recorder.stop();
-            release(session);
-        }
-    }
+    /** Stop the recording and transcribe what was heard: by hand, by the size cap, or by the time cap. */
+    const stop = () => {
+        const each = session;
 
-    function begin() {
+        if (!each || each.phase !== "recording") {
+            return;
+        }
+
+        each.phase = "stopping";
+
+        if (each.recorder.state === "recording") {
+            each.recorder.stop();
+        }
+
+        release(each);
+    };
+
+    async function start() {
         const conversationId = pocket.conversationId();
         const person = pocket.me();
 
         if (conversationId === null || !person || person.role === "viewer") {
-            pocket.notify("warning", "Ouvre une conversation dans laquelle tu peux écrire.");
+            pocket.notify("warning", "Open a conversation you can write in.");
 
             return;
         }
@@ -170,223 +171,154 @@ export default function setup(pocket) {
             !navigator.mediaDevices?.getUserMedia ||
             typeof MediaRecorder !== "function"
         ) {
-            pocket.notify(
-                "error",
-                "L’enregistrement nécessite HTTPS et un navigateur avec accès au microphone.",
-            );
+            pocket.notify("error", "Recording needs HTTPS and a browser with microphone access.");
 
             return;
         }
 
-        cancel(current);
-        const session = {
+        if (session) {
+            return;
+        }
+
+        const each = {
+            phase: "recording",
             conversationId,
             personId: person.id,
-            alive: true,
-            text: "",
-            phase: "idle",
-            engine: localStorage.getItem(ENGINE_KEY) === "local" ? "local" : "mistral",
-            error: "",
-            stream: null,
+            engine: engine(),
             recorder: null,
+            stream: null,
             timer: null,
             chunks: [],
+            size: 0,
             request: new AbortController(),
-            changed: null,
         };
 
-        current = session;
-        pocket.openSheet("dictation", { session });
-    }
-
-    async function record(session) {
-        if (!session.alive || !["idle", "error"].includes(session.phase)) {
-            return;
-        }
-
-        session.phase = "permission";
-        session.error = "";
-        session.text = "";
-        session.chunks = [];
-        session.recorder = null;
-        publish(session);
-
         try {
-            // Request microphone access in the Record button's user gesture.
+            // The microphone is asked for in the button's own user gesture.
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            if (!session.alive || document.hidden) {
+            if (session || !stream.getTracks().some((track) => track.readyState === "live")) {
                 stream.getTracks().forEach((track) => track.stop());
-                fail(session, "Reviens dans cet onglet avant de démarrer l’enregistrement.");
 
                 return;
             }
 
-            session.stream = stream;
+            if (document.hidden) {
+                stream.getTracks().forEach((track) => track.stop());
+                pocket.notify("warning", "Come back to this tab before recording.");
+
+                return;
+            }
+
             const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find(
                 (type) => MediaRecorder.isTypeSupported(type),
             );
             const recorder = new MediaRecorder(stream, {
                 ...(mimeType ? { mimeType } : {}),
-                audioBitsPerSecond: 32_000,
+                // 16 kbit/s keeps about 5 minutes within the size limit; speech stays clear.
+                audioBitsPerSecond: 16_000,
             });
-            let size = 0;
 
-            session.recorder = recorder;
+            session = each;
+            each.stream = stream;
+            each.recorder = recorder;
             recorder.ondataavailable = (event) => {
-                if (!session.alive || session.phase === "error" || session.recorder !== recorder) {
+                if (session !== each || each.phase === "transcribing") {
                     return;
                 }
 
-                size += event.data.size;
+                each.size += event.data.size;
+                each.chunks.push(event.data);
 
-                if (size > MAX_BYTES) {
-                    fail(
-                        session,
-                        "L’enregistrement est trop volumineux. Dicte un message plus court.",
-                    );
-
-                    return;
-                }
-
-                session.chunks.push(event.data);
-            };
-            recorder.onstop = () => {
-                if (session.recorder === recorder) {
-                    transcribe(session);
+                if (each.size > MAX_BYTES) {
+                    stop();
                 }
             };
-            recorder.onerror = () => fail(session, "L’enregistrement du microphone a échoué.");
+            recorder.onstop = () => transcribe(each);
+            recorder.onerror = () => {
+                if (session === each) {
+                    pocket.notify("error", "The microphone recording failed.");
+                    cancel();
+                }
+            };
             recorder.start(1000);
-            session.phase = "recording";
-            session.timer = setTimeout(() => stop(session), 120_000);
-            publish(session);
+            each.timer = setTimeout(stop, MAX_MS);
+            busy("recording", "Recording…");
         } catch (error) {
+            release(each);
+            session = null;
+
             const message =
                 error.name === "NotAllowedError"
-                    ? "Autorise le microphone dans les réglages du navigateur."
+                    ? "Allow the microphone in the browser's settings."
                     : error.name === "NotFoundError"
-                      ? "Aucun microphone disponible."
-                      : "Impossible de démarrer l’enregistrement du microphone.";
+                      ? "No microphone found."
+                      : "Cannot start recording.";
 
-            fail(session, message);
+            pocket.notify("error", message);
         }
     }
 
-    function Dictation({ session, close }) {
-        const [state, setState] = useState(() => snapshot(session));
+    /** One button, three states: record, stop, or cancel the transcription in flight. */
+    const tap = () => {
+        if (!session) {
+            start();
 
-        useEffect(() => {
-            session.changed = setState;
-            setState(snapshot(session));
+            return;
+        }
 
-            const hidden = () => {
-                if (document.hidden) {
-                    stop(session);
-                }
-            };
-            const leave = () => cancel(session);
+        if (session.phase === "recording") {
+            stop();
 
-            document.addEventListener("visibilitychange", hidden);
-            window.addEventListener("pagehide", leave);
+            return;
+        }
 
-            return () => {
-                document.removeEventListener("visibilitychange", hidden);
-                window.removeEventListener("pagehide", leave);
-                cancel(session);
-            };
-        }, [session]);
+        pocket.notify("info", "Dictation cancelled.");
+        cancel();
+    };
 
-        const insert = () => {
-            if (
-                !session.alive ||
-                state.phase !== "ready" ||
-                pocket.conversationId() !== session.conversationId ||
-                pocket.me()?.id !== session.personId ||
-                pocket.me()?.role === "viewer"
-            ) {
-                pocket.notify("warning", "La conversation a changé. Aucun texte inséré.");
+    // Hiding the tab stops the recording; the transcript is waiting when the person returns.
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden && session?.phase === "recording") {
+            stop();
+        }
+    });
 
-                return;
-            }
+    function AudioSettings() {
+        const [value, setValue] = useState(engine);
 
-            if (state.text.trim()) {
-                pocket.insertText(state.text.trim(), { inline: true });
-            }
-        };
-
-        return html`<div class="voice-message">
+        return html`<div class="voice-settings">
+            <label for="voice-settings-engine">Transcription model</label>
             <select
-                aria-label="Moteur de transcription"
-                value=${state.engine}
-                disabled=${!["idle", "error"].includes(state.phase)}
+                id="voice-settings-engine"
+                value=${value}
                 onChange=${(event) => {
-                    session.engine = event.currentTarget.value;
-                    localStorage.setItem(ENGINE_KEY, session.engine);
-                    publish(session);
+                    const next = event.currentTarget.value;
+
+                    localStorage.setItem(ENGINE_KEY, next);
+                    setValue(next);
                 }}
             >
                 <option value="mistral">Mistral · Voxtral Mini Transcribe 3</option>
-                <option value="local">Local · Whisper (adaptatif)</option>
+                <option value="local">Local · Whisper (adaptive)</option>
             </select>
-            ${
-                state.phase === "ready" &&
-                state.model &&
-                html`<p class="muted small">Transcrit par ${state.model}</p>`
-            }
+            <p class="muted small">${ABOUT[value]}</p>
             <p class="muted small">
-                ${
-                    state.engine === "local"
-                        ? "Audio traité sur le serveur Pi Pocket."
-                        : "Audio envoyé à Mistral · 0,0035 $/min, sur tes crédits API."
-                }
+                Recordings are held in memory and never written to disk. Only the text you keep
+                reaches the message box; nothing is sent until you send it.
             </p>
-            <label for="voice-message-text" aria-live="polite">${PHASE[state.phase]}</label>
-            <textarea
-                id="voice-message-text"
-                aria-label="Message dicté"
-                rows="7"
-                maxlength="100000"
-                value=${state.text}
-                readonly=${state.phase !== "ready"}
-                onInput=${(event) => setState({ ...state, text: event.currentTarget.value })}
-            ></textarea>
-            ${state.error && html`<div class="error-box" role="alert">${state.error}</div>`}
-            <div class="voice-message-actions">
-                <button
-                    class="button"
-                    onClick=${() => {
-                        cancel(session);
-                        close();
-                    }}
-                >
-                    Annuler
-                </button>
-                ${
-                    ["idle", "error"].includes(state.phase)
-                        ? html`<button class="button primary" onClick=${() => record(session)}>
-                              Enregistrer
-                          </button>`
-                        : state.phase === "recording"
-                          ? html`<button class="button primary" onClick=${() => stop(session)}>
-                                Arrêter
-                            </button>`
-                          : state.phase === "ready" &&
-                            html`<button
-                                class="button primary"
-                                disabled=${!state.text.trim() || state.text.length > 100000}
-                                onClick=${insert}
-                            >
-                                Insérer
-                            </button>`
-                }
-            </div>
         </div>`;
     }
 
     pocket.style("style.css");
-    pocket.sheet({ id: "dictation", title: "Message vocal", component: Dictation });
-    pocket.composerButton({ id: "dictate", title: "Dicter un message", iconPath: MIC, run: begin });
+    pocket.sheet({ id: "audio-settings", title: "Audio settings", component: AudioSettings });
+    pocket.menu({ id: "audio-settings", label: "Audio settings", sheet: "audio-settings" });
+    button = pocket.composerButton({
+        id: "dictate",
+        title: "Dictate a message",
+        iconPath: MIC,
+        run: tap,
+    });
 
-    return () => cancel(current);
+    return () => cancel();
 }

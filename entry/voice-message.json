@@ -1,0 +1,55 @@
+{
+"name": "voice-message",
+"title": "Voice message",
+"description": "Dictate a message: record with the mic, transcribe with Mistral Voxtral or local Whisper (a GPU model, or a small CPU model that any machine can run), review the text, and insert it as a draft. Never sends automatically. The local engine builds its own pinned Python runtime beside the module at first use (uv or python3-venv, faster-whisper and the small model from pinned revisions); audio stays on the server unless the owner picks Mistral, whose key is read only on the server.",
+"tags": ["voice", "dictation", "whisper", "transcription", "mistral"],
+"author": { "name": "piromagnus", "github": "piromagnus" },
+"version": "1.0.0",
+"source": {
+"repo": "piromagnus/pi-pocket-voice-message",
+"commit": "6c8db15b5c77b73a682533d2357370d3bea1d001",
+"path": ""
+},
+"files": [
+{
+"name": "voice-message.ts",
+"sha256": "b9808fc5ff4f05402d083e4608f455c8cdaf06ba75d0a0d2e426da1731dff9f5",
+"size": 15485
+},
+{
+"name": "voice-message/index.js",
+"sha256": "3fe0fde0ff786df42663c8e784996050197518b50903f19f7456614618d5abfe",
+"size": 13079
+},
+{
+"name": "voice-message/style.css",
+"sha256": "66918db7126d0c01e5ebd4094380dfc864d4ed725571848a5bb08fe4691a0d14",
+"size": 720
+},
+{
+"name": "voice-message/transcribe.py",
+"sha256": "21327106109b6402e4c2642efb6399f64da076f1e72b7340244d1ea13a27f5e3",
+"size": 3661
+},
+{
+"name": "voice-message/requirements.lock",
+"sha256": "05b68aca3c2cb48cdd9617b911d8e2c618b8842c155173bdf0f99cab379d6caa",
+"size": 384
+}
+],
+"pocketApi": 1,
+"minPocket": "0.19.0",
+"declares": {
+"extensions": [],
+"tools": [],
+"readOnlyTools": [],
+"hooks": [],
+"sections": [],
+"wraps": [],
+"routes": ["POST transcribe"],
+"client": "owner",
+"access": "owner",
+"commands": []
+},
+"revoked": []
+}

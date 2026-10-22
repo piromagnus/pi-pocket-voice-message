@@ -13,8 +13,8 @@ from pathlib import Path
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 MAX_BYTES = 700_000
-# Allow codec framing beyond the browser's 120-second recording limit.
-MAX_SAMPLES = 16_000 * 125
+# Allow codec framing beyond the browser's 5-minute recording limit.
+MAX_SAMPLES = 16_000 * 310
 SMALL_PIN = "536b0662742c02347bc0e980a01041f333bce120"
 
 

@@ -159,7 +159,7 @@ export default function voiceMessage(host: Host, web: Web) {
             const engine = body.engine === undefined ? "local" : body.engine;
 
             if (engine !== "local" && engine !== "mistral") {
-                throw web.error(400, "Moteur de transcription invalide.");
+                throw web.error(400, "Invalid transcription engine.");
             }
 
             if (
@@ -169,7 +169,7 @@ export default function voiceMessage(host: Host, web: Web) {
                 typeof body.mimeType !== "string" ||
                 !TYPES.has(body.mimeType.split(";", 1)[0].trim())
             ) {
-                throw web.error(400, "Format audio invalide ou enregistrement trop volumineux.");
+                throw web.error(400, "Invalid audio format, or a recording that is too large.");
             }
 
             const audio = Buffer.from(body.audio, "base64");
@@ -179,14 +179,11 @@ export default function voiceMessage(host: Host, web: Web) {
                 audio.length > MAX_BYTES ||
                 audio.toString("base64") !== body.audio
             ) {
-                throw web.error(400, "Format audio invalide ou enregistrement trop volumineux.");
+                throw web.error(400, "Invalid audio format, or a recording that is too large.");
             }
 
             if (busy) {
-                throw web.error(
-                    429,
-                    "Une transcription est déjà en cours. Réessaie dans un instant.",
-                );
+                throw web.error(429, "A transcription is already running. Try again in a moment.");
             }
 
             busy = true;
@@ -196,11 +193,11 @@ export default function voiceMessage(host: Host, web: Web) {
                 const stop = AbortSignal.any([
                     signal,
                     disposed.signal,
-                    AbortSignal.timeout(engine === "local" ? 240_000 : 90_000),
+                    AbortSignal.timeout(engine === "local" ? 290_000 : 90_000),
                 ]);
 
                 if (stop.aborted) {
-                    throw web.error(408, "La transcription a été annulée.");
+                    throw web.error(408, "The transcription was cancelled.");
                 }
 
                 if (engine === "mistral") {
@@ -209,11 +206,14 @@ export default function voiceMessage(host: Host, web: Web) {
                     try {
                         key = await mistralKey(host.agentDir);
                     } catch {
-                        throw web.error(503, "La clé API Mistral est indisponible.");
+                        throw web.error(
+                            503,
+                            "No Mistral API key is configured. Set MISTRAL_API_KEY, or pick the local engine in Audio settings.",
+                        );
                     }
 
                     if (stop.aborted) {
-                        throw web.error(408, "La transcription a été annulée.");
+                        throw web.error(408, "The transcription was cancelled.");
                     }
 
                     const form = new FormData();
@@ -242,15 +242,15 @@ export default function voiceMessage(host: Host, web: Web) {
                         throw web.error(
                             stop.aborted ? 408 : 502,
                             stop.aborted
-                                ? "La transcription a été annulée ou a dépassé 90 secondes."
-                                : "La requête de transcription Mistral a échoué.",
+                                ? "The transcription was cancelled or timed out."
+                                : "The request to the Mistral transcription API failed.",
                         );
                     }
 
                     if (!response.ok) {
                         throw web.error(
                             502,
-                            `La transcription Mistral a échoué (HTTP ${response.status}).`,
+                            `Mistral transcription failed (HTTP ${response.status}).`,
                         );
                     }
 
@@ -259,14 +259,11 @@ export default function voiceMessage(host: Host, web: Web) {
                     try {
                         responseText = await response.text();
                     } catch {
-                        throw web.error(502, "La réponse de transcription Mistral est invalide.");
+                        throw web.error(502, "Mistral returned an invalid transcription response.");
                     }
 
                     if (responseText.length > MAX_TEXT + 10_000) {
-                        throw web.error(
-                            502,
-                            "La réponse de transcription Mistral est trop longue.",
-                        );
+                        throw web.error(502, "The Mistral transcription response is too long.");
                     }
 
                     let result: unknown;
@@ -274,7 +271,7 @@ export default function voiceMessage(host: Host, web: Web) {
                     try {
                         result = JSON.parse(responseText);
                     } catch {
-                        throw web.error(502, "La réponse de transcription Mistral est invalide.");
+                        throw web.error(502, "Mistral returned an invalid transcription response.");
                     }
 
                     const text =
@@ -283,7 +280,7 @@ export default function voiceMessage(host: Host, web: Web) {
                             : undefined;
 
                     if (typeof text !== "string" || text.length > MAX_TEXT) {
-                        throw web.error(502, "La réponse de transcription Mistral est invalide.");
+                        throw web.error(502, "Mistral returned an invalid transcription response.");
                     }
 
                     return { text, model: MISTRAL_MODEL, local: false };
@@ -295,14 +292,14 @@ export default function voiceMessage(host: Host, web: Web) {
                     python = await ensureVenv(runtime, stop);
                 } catch (error) {
                     if (stop.aborted) {
-                        throw web.error(408, "La transcription a été annulée.");
+                        throw web.error(408, "The transcription was cancelled.");
                     }
 
                     throw web.error(
                         503,
-                        `La transcription locale n’a pas pu préparer Python (${
-                            error instanceof Error ? error.message : "erreur"
-                        }). Installe uv ou python3-venv, puis réessaie.`,
+                        `The local engine could not prepare Python (${
+                            error instanceof Error ? error.message : "error"
+                        }). Install uv or python3-venv, then try again.`,
                     );
                 }
 
@@ -330,7 +327,7 @@ export default function voiceMessage(host: Host, web: Web) {
                         }
                     });
                     child.once("error", () => {
-                        reject(web.error(503, "Le moteur Whisper local est indisponible."));
+                        reject(web.error(503, "The Whisper engine is unavailable."));
                     });
                     child.once("close", (code) => {
                         stop.removeEventListener("abort", abort);
@@ -340,12 +337,7 @@ export default function voiceMessage(host: Host, web: Web) {
                         }
 
                         if (stop.aborted) {
-                            reject(
-                                web.error(
-                                    408,
-                                    "La transcription a été annulée ou a dépassé son délai.",
-                                ),
-                            );
+                            reject(web.error(408, "The transcription was cancelled or timed out."));
 
                             return;
                         }
@@ -363,8 +355,8 @@ export default function voiceMessage(host: Host, web: Web) {
                                     web.error(
                                         400,
                                         result.error === "too_long"
-                                            ? "Le message vocal dépasse la limite de 2 minutes."
-                                            : "L’enregistrement audio est illisible.",
+                                            ? "The voice message exceeds the 5-minute limit."
+                                            : "The audio recording is unreadable.",
                                     ),
                                 );
                             } else if (
@@ -377,7 +369,7 @@ export default function voiceMessage(host: Host, web: Web) {
                                 reject(
                                     web.error(
                                         503,
-                                        "Whisper local est indisponible. Vérifie le GPU, le modèle ou l’installation Python.",
+                                        "Whisper local is unavailable. Check the GPU, the model, or the Python installation.",
                                     ),
                                 );
                             } else {
@@ -390,10 +382,7 @@ export default function voiceMessage(host: Host, web: Web) {
                             }
                         } catch {
                             reject(
-                                web.error(
-                                    503,
-                                    "Le moteur Whisper local n’a pas fourni une transcription valide.",
-                                ),
+                                web.error(503, "The local engine returned no valid transcription."),
                             );
                         }
                     });
