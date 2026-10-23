@@ -20,9 +20,11 @@ test("Mistral: saved key, exact model, no retries, safe errors, cancellation and
         onDispose(fn: () => void) {
             dispose = fn;
         },
-        route(_method: string, _path: string, fn: typeof route, options: { access: string }) {
-            assert.equal(options.access, "owner");
-            route = fn;
+        route(method: string, _path: string, fn: typeof route, options: { access: string }) {
+            if (_path === "transcribe") {
+                assert.equal(options.access, "owner");
+                route = fn;
+            }
         },
         error(status: number, message: string) {
             return Object.assign(new Error(message), { status });

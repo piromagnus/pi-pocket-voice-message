@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PI_POCKET = process.env.PI_POCKET_REPO ?? "/home/pmarrec/pi-pocket";
+const PI_POCKET =
+    process.env.PI_POCKET_REPO ?? fileURLToPath(new URL("../pi-pocket", import.meta.url));
 const { cleanUp, newSession, openApp, owner, root, scriptedModel } = await import(
     pathToFileURL(join(PI_POCKET, "test/helpers.ts")).href
 );

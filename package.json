@@ -1,0 +1,11 @@
+{
+    "name": "pi-pocket-voice-message",
+    "version": "1.2.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "check": "node --check voice-message.ts && node --check voice-message/index.js && node --check voice-message/draft.js && node --check voice-message/live.js && node --check voice-message/pcm-worklet.js",
+        "test": "node --test test/draft.test.mjs test/server.test.ts test/bootstrap.test.ts test/realtime.test.ts _voice-message-api.test.ts",
+        "test:integration": "node --test _voice-message.test.ts _voice-message-bootstrap.test.ts _voice-message-light.test.ts test/real-local-ui.test.ts test/live-realtime-ui.test.ts"
+    }
+}

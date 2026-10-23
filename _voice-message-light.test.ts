@@ -7,14 +7,14 @@ import { spawn } from "node:child_process";
 import { test } from "node:test";
 
 const source = fileURLToPath(new URL(".", import.meta.url));
-const runtime = join(source, "_voice-message");
+const runtime = process.env.VOICE_TEST_RUNTIME ?? join(source, "_voice-message");
 const python = join(runtime, ".venv", "bin", "python");
 // The Python engines need this machine's prepared runtime; other machines get it at their first transcription.
 const skip = existsSync(python)
     ? false
     : "no local Python runtime yet: run one local transcription first";
 const script = join(source, "voice-message", "transcribe.py");
-const french = readFileSync(join(runtime, "fixtures", "french.wav"));
+const french = readFileSync(join(source, "_voice-message", "fixtures", "french.wav"));
 const REFERENCE =
     "Premièrement, la plupart des cavaliers portent des bottes d'équitation avec un talon et une semelle lisse et assez étroite.";
 
@@ -38,15 +38,24 @@ function transcribe(
     });
 }
 
-test("adaptive engine picks the GPU model when present", { skip }, async () => {
-    const result = await transcribe({}, french);
-    const parsed = JSON.parse(result.output);
+test(
+    "adaptive engine picks the GPU model when present",
+    {
+        skip:
+            skip ||
+            (process.env.VOICE_TEST_GPU !== "1" &&
+                "Set VOICE_TEST_GPU=1 to test installed CUDA weights."),
+    },
+    async () => {
+        const result = await transcribe({}, french);
+        const parsed = JSON.parse(result.output);
 
-    assert.equal(result.code, 0);
-    assert.equal(parsed.model, "whisper-large-v3-turbo");
-    assert.equal(parsed.device, "cuda");
-    assert.equal(parsed.text, REFERENCE);
-});
+        assert.equal(result.code, 0);
+        assert.equal(parsed.model, "whisper-large-v3-turbo");
+        assert.equal(parsed.device, "cuda");
+        assert.equal(parsed.text, REFERENCE);
+    },
+);
 
 test("light engine: the small model transcribes French on CPU", { skip }, async () => {
     const result = await transcribe({ VOICE_FORCE_LIGHT: "1" }, french);

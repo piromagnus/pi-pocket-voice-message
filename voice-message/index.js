@@ -1,3 +1,6 @@
+import { createDraft } from "./draft.js";
+import { createLive } from "./live.js";
+
 export const pocketApi = 1;
 
 const MIC =
@@ -6,141 +9,297 @@ const STOP = "M7 7h10v10H7z";
 const ENGINE_KEY = "x.voice-message.engine";
 const MAX_BYTES = 700_000;
 const MAX_MS = 300_000;
-const ABOUT = {
-    mistral: "Your recording goes to Mistral's official API — $0.0035/min on your API credits.",
-    local: "Your recording is transcribed on this server: a GPU model when available, otherwise a small CPU model.",
-};
-
-/** The engine this browser uses, as Audio settings chose it. */
+const PREVIEW_MS = 3_000;
 const engine = () => (localStorage.getItem(ENGINE_KEY) === "local" ? "local" : "mistral");
 
 export default function setup(pocket) {
-    const { html, useEffect, useState } = pocket;
+    const { html, useState } = pocket;
     let session = null;
-    let button = null;
+    let disposed = false;
+    let button;
     let status = null;
 
-    if (typeof pocket.composerButton !== "function" || typeof pocket.insertText !== "function") {
-        throw new Error("Voice dictation needs Pi Pocket 0.19 or newer.");
+    function show(phase) {
+        if (disposed) {
+            return;
+        }
+
+        const title =
+            phase === "recording"
+                ? "Stop dictation"
+                : phase === "permission"
+                  ? "Cancel microphone request"
+                  : phase === "final"
+                    ? "Cancel final transcription"
+                    : "Dictate a message";
+
+        button?.update({ title, iconPath: phase === "recording" ? STOP : MIC });
+
+        if (!phase) {
+            status?.remove();
+            status = null;
+
+            return;
+        }
+
+        const text =
+            phase === "recording"
+                ? "Recording · live preview"
+                : phase === "permission"
+                  ? "Waiting for microphone…"
+                  : "Finalizing transcript…";
+
+        if (status) {
+            status.update({ text });
+        } else {
+            status = pocket.status({ id: "dictation", text, short: "voice", title, tone: "muted" });
+        }
     }
 
-    /** The mic button and the status line say what is going on. */
-    const idle = () => {
-        button?.update({ title: "Dictate a message", iconPath: MIC });
-        status?.remove();
-        status = null;
-    };
-    const busy = (phase, text) => {
-        button?.update({
-            title: phase === "recording" ? "Stop dictation" : "Transcribing…",
-            iconPath: phase === "recording" ? STOP : MIC,
-        });
-        status?.update({ text });
-        status ??= pocket.status({
-            id: "dictation",
-            text,
-            short: "voice",
-            title: "Voice dictation",
-            tone: "muted",
-        });
-    };
+    const valid = (each) =>
+        !disposed &&
+        session === each &&
+        pocket.conversationId() === each.conversationId &&
+        pocket.me()?.id === each.personId &&
+        pocket.me()?.role !== "viewer" &&
+        each.box.isConnected &&
+        !each.box.disabled &&
+        !each.box.readOnly;
 
-    const release = (each) => {
+    function release(each) {
         clearTimeout(each.timer);
+        clearTimeout(each.previewTimer);
+        clearInterval(each.scopeTimer);
         each.stream?.getTracks().forEach((track) => track.stop());
         each.stream = null;
-    };
+    }
 
-    const reset = () => {
-        session = null;
-        idle();
-    };
+    function finish(each) {
+        release(each);
+        each.live?.cancel();
+        each.request.abort();
+        each.draft.close();
+        each.chunks = [];
+        each.queue = [];
 
-    /** Drop everything without a word: closing, turning off, navigating away. */
-    const cancel = () => {
-        if (!session) {
-            return;
+        if (session === each) {
+            session = null;
+            show(null);
         }
+    }
 
+    function cancel() {
         const each = session;
 
-        session = null;
-        each.request.abort();
-
-        if (each.recorder && each.recorder.state !== "inactive") {
-            each.recorder.onstop = null;
-            each.recorder.ondataavailable = null;
-            each.recorder.stop();
-        }
-
-        release(each);
-        idle();
-    };
-
-    /** The transcript lands in the message box, ready to edit and send by hand. */
-    const insert = (each, text) => {
-        if (pocket.conversationId() !== each.conversationId || pocket.me()?.id !== each.personId) {
-            pocket.notify("warning", "The conversation changed; the dictation was not inserted.");
-
+        if (!each) {
             return;
         }
 
-        if (text) {
-            pocket.insertText(text, { inline: true });
-        } else {
-            pocket.notify("warning", "No speech recognized.");
-        }
-    };
+        // Clear handlers before stopping: a late stop must never start a transcription.
+        for (const recorder of [each.recorder, each.previewRecorder]) {
+            if (recorder) {
+                recorder.onstop = null;
+                recorder.ondataavailable = null;
+                recorder.onerror = null;
 
-    async function transcribe(each) {
-        release(each);
-        each.phase = "transcribing";
-        busy("transcribing", "Transcribing…");
+                if (recorder.state !== "inactive") {
+                    recorder.stop();
+                }
+            }
+        }
+
+        finish(each);
+    }
+
+    async function request(each, blob, phase) {
+        if (!valid(each) || each.request.signal.aborted) {
+            throw new Error("Dictation cancelled.");
+        }
+
+        if (!blob.size) {
+            throw new Error("Nothing was recorded. Speak for a moment before you stop.");
+        }
+
+        if (blob.size > MAX_BYTES) {
+            throw new Error("The recording is too large. Try a shorter message.");
+        }
+
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const parts = [];
+
+        for (let at = 0; at < bytes.length; at += 8192) {
+            parts.push(String.fromCharCode(...bytes.subarray(at, at + 8192)));
+        }
+
+        if (!valid(each)) {
+            throw new Error("Dictation cancelled.");
+        }
+
+        const result = await pocket.api(
+            "transcribe",
+            {
+                audio: btoa(parts.join("")),
+                mimeType: blob.type,
+                engine: each.engine,
+                phase,
+            },
+            { signal: each.request.signal },
+        );
+
+        if (typeof result?.text !== "string" || result.text.length > 100_000) {
+            throw new Error("The transcription engine returned no valid text.");
+        }
+
+        return result.text.trim();
+    }
+
+    function previewFailure(each) {
+        if (!each.previewFailed && valid(each)) {
+            each.previewFailed = true;
+            pocket.notify(
+                "warning",
+                "Live preview is unavailable. The full recording will be transcribed when you stop.",
+            );
+        }
+    }
+
+    function drain(each) {
+        if (each.pending || !each.queue.length || !valid(each) || each.phase !== "recording") {
+            return;
+        }
+
+        const blob = each.queue.shift();
+
+        each.pending = (async () => {
+            try {
+                const text = await request(each, blob, "preview");
+
+                if (valid(each) && text) {
+                    each.previewText = [each.previewText, text].filter(Boolean).join(" ");
+                    each.draft.update(each.previewText);
+                }
+            } catch {
+                previewFailure(each);
+            } finally {
+                each.pending = null;
+                drain(each);
+            }
+        })();
+    }
+
+    /** Mistral's live transcription: words arrive while the person speaks, with no chunk boundaries. */
+    function startLive(each) {
+        each.live = createLive(pocket, {
+            onText: (text) => {
+                if (valid(each) && text) {
+                    each.previewText = text;
+                    each.draft.update(text);
+                }
+            },
+            onFail: () => previewFailure(each),
+        });
+        each.live.start(each.stream);
+    }
+
+    function makeRecorder(each) {
+        const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find(
+            (type) => MediaRecorder.isTypeSupported(type),
+        );
+
+        return new MediaRecorder(each.stream, {
+            ...(mimeType ? { mimeType } : {}),
+            audioBitsPerSecond: 16_000,
+        });
+    }
+
+    function preview(each) {
+        if (!valid(each) || each.phase !== "recording" || each.previewFailed) {
+            return;
+        }
 
         try {
-            const blob = new Blob(each.chunks, { type: each.recorder.mimeType });
+            // Each preview has its own container header; arbitrary MediaRecorder timeslice blobs cannot be decoded alone.
+            const recorder = makeRecorder(each);
+            const chunks = [];
+            let bytes = 0;
 
-            each.chunks = [];
+            each.previewRecorder = recorder;
+            recorder.ondataavailable = ({ data }) => {
+                bytes += data.size;
 
-            if (!blob.size || blob.size > MAX_BYTES) {
-                throw new Error("The recording is empty or too large. Try a shorter message.");
-            }
+                if (bytes <= MAX_BYTES) {
+                    chunks.push(data);
+                }
+            };
+            recorder.onstop = () => {
+                if (valid(each) && each.phase === "recording") {
+                    if (each.queue.length < 2 && bytes <= MAX_BYTES && bytes > 0) {
+                        each.queue.push(new Blob(chunks, { type: recorder.mimeType }));
+                        drain(each);
+                    } else {
+                        previewFailure(each);
+                    }
 
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            const parts = [];
+                    preview(each);
+                }
+            };
+            recorder.onerror = () => previewFailure(each);
+            recorder.start();
+            each.previewTimer = setTimeout(() => {
+                if (recorder.state === "recording") {
+                    recorder.stop();
+                }
+            }, PREVIEW_MS);
+        } catch {
+            // Some devices allow only one recorder. Keep the complete recording and explain the fallback.
+            previewFailure(each);
+        }
+    }
 
-            for (let offset = 0; offset < bytes.length; offset += 8192) {
-                parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 8192)));
-            }
+    async function finalize(each) {
+        each.phase = "final";
+        release(each);
+        each.queue = [];
+        show("final");
 
-            const result = await pocket.api(
-                "transcribe",
-                { audio: btoa(parts.join("")), mimeType: blob.type, engine: each.engine },
-                { signal: each.request.signal },
-            );
+        try {
+            // Wait for the only in-flight preview so it releases the server's single-request lock. A live session
+            // is closed first, for the same reason, and for the last words Mistral had not yet sent.
+            await each.pending;
+            await each.live?.end();
 
-            if (session !== each) {
+            if (!valid(each)) {
                 return;
             }
 
-            if (typeof result?.text !== "string" || result.text.length > 100_000) {
-                throw new Error("The transcription engine returned no valid text.");
+            const blob = new Blob(each.chunks, { type: each.recorder.mimeType });
+            const text = await request(each, blob, "final");
+
+            if (!valid(each)) {
+                return;
             }
 
-            insert(each, result.text.trim());
+            if (!each.draft.update(text) && each.draft.edited) {
+                pocket.notify(
+                    "info",
+                    "Your edits were kept; the final transcript did not replace them.",
+                );
+            } else if (!text) {
+                pocket.notify("warning", "No speech recognized. Any preview text was kept.");
+            }
         } catch (error) {
-            if (session === each && !each.request.signal.aborted) {
-                pocket.notify("error", error.message || "The transcription failed.");
+            if (valid(each) && !each.request.signal.aborted) {
+                pocket.notify(
+                    "error",
+                    `${error.message || "Transcription failed."} Any preview text was kept.`,
+                );
             }
         } finally {
-            if (session === each) {
-                reset();
-            }
+            finish(each);
         }
     }
 
-    /** Stop the recording and transcribe what was heard: by hand, by the size cap, or by the time cap. */
-    const stop = () => {
+    function stop() {
         const each = session;
 
         if (!each || each.phase !== "recording") {
@@ -148,19 +307,31 @@ export default function setup(pocket) {
         }
 
         each.phase = "stopping";
+        clearTimeout(each.previewTimer);
 
-        if (each.recorder.state === "recording") {
-            each.recorder.stop();
+        if (each.previewRecorder?.state === "recording") {
+            each.previewRecorder.stop();
         }
 
-        release(each);
-    };
+        each.recorder.stop();
+        each.stream?.getTracks().forEach((track) => track.stop());
+    }
 
     async function start() {
-        const conversationId = pocket.conversationId();
         const person = pocket.me();
+        const conversationId = pocket.conversationId();
+        // Pi Pocket has no public replace-range API. Use its documented composer part and the ordinary input event.
+        // No core imports, internal store writes, prototype patches, or send actions are used.
+        const box = document.querySelector('[data-part~="composer"] textarea');
 
-        if (conversationId === null || !person || person.role === "viewer") {
+        if (
+            !person ||
+            person.role === "viewer" ||
+            conversationId === null ||
+            !box ||
+            box.disabled ||
+            box.readOnly
+        ) {
             pocket.notify("warning", "Open a conversation you can write in.");
 
             return;
@@ -176,113 +347,152 @@ export default function setup(pocket) {
             return;
         }
 
-        if (session) {
-            return;
-        }
-
         const each = {
-            phase: "recording",
-            conversationId,
+            phase: "permission",
             personId: person.id,
+            conversationId,
+            box,
             engine: engine(),
-            recorder: null,
-            stream: null,
-            timer: null,
-            chunks: [],
-            size: 0,
             request: new AbortController(),
+            stream: null,
+            recorder: null,
+            previewRecorder: null,
+            chunks: [],
+            queue: [],
+            pending: null,
+            live: null,
+            previewText: "",
+            previewFailed: false,
+            timer: null,
+            previewTimer: null,
+            scopeTimer: null,
+            size: 0,
+            draft: null,
         };
 
+        session = each;
+        each.draft = createDraft(box, () => valid(each));
+        show("permission");
+        each.scopeTimer = setInterval(() => {
+            if (!valid(each)) {
+                cancel();
+            }
+        }, 150);
+
         try {
-            // The microphone is asked for in the button's own user gesture.
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            if (session || !stream.getTracks().some((track) => track.readyState === "live")) {
+            if (!valid(each) || document.hidden) {
                 stream.getTracks().forEach((track) => track.stop());
+
+                if (session === each) {
+                    finish(each);
+                }
 
                 return;
             }
 
-            if (document.hidden) {
-                stream.getTracks().forEach((track) => track.stop());
-                pocket.notify("warning", "Come back to this tab before recording.");
-
-                return;
-            }
-
-            const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find(
-                (type) => MediaRecorder.isTypeSupported(type),
-            );
-            const recorder = new MediaRecorder(stream, {
-                ...(mimeType ? { mimeType } : {}),
-                // 16 kbit/s keeps about 5 minutes within the size limit; speech stays clear.
-                audioBitsPerSecond: 16_000,
-            });
-
-            session = each;
             each.stream = stream;
-            each.recorder = recorder;
-            recorder.ondataavailable = (event) => {
-                if (session !== each || each.phase === "transcribing") {
+            each.recorder = makeRecorder(each);
+            each.recorder.ondataavailable = ({ data }) => {
+                if (session !== each) {
                     return;
                 }
 
-                each.size += event.data.size;
-                each.chunks.push(event.data);
+                each.size += data.size;
 
                 if (each.size > MAX_BYTES) {
-                    stop();
-                }
-            };
-            recorder.onstop = () => transcribe(each);
-            recorder.onerror = () => {
-                if (session === each) {
-                    pocket.notify("error", "The microphone recording failed.");
+                    pocket.notify(
+                        "error",
+                        "The recording exceeded the upload limit. Any preview text was kept.",
+                    );
                     cancel();
+
+                    return;
                 }
+
+                each.chunks.push(data);
             };
-            recorder.start(1000);
+            each.recorder.onstop = () => finalize(each);
+            each.recorder.onerror = () => {
+                pocket.notify(
+                    "error",
+                    "The microphone recording failed. Any preview text was kept.",
+                );
+                cancel();
+            };
+            each.phase = "recording";
+            each.recorder.start(1000);
             each.timer = setTimeout(stop, MAX_MS);
-            busy("recording", "Recording…");
+            show("recording");
+
+            if (each.engine === "mistral") {
+                startLive(each);
+            } else {
+                preview(each);
+            }
         } catch (error) {
-            release(each);
-            session = null;
-
-            const message =
-                error.name === "NotAllowedError"
-                    ? "Allow the microphone in the browser's settings."
-                    : error.name === "NotFoundError"
-                      ? "No microphone found."
-                      : "Cannot start recording.";
-
-            pocket.notify("error", message);
+            if (session === each) {
+                pocket.notify(
+                    "error",
+                    error.name === "NotAllowedError"
+                        ? "Allow the microphone in the browser's settings."
+                        : error.name === "NotFoundError"
+                          ? "No microphone found."
+                          : "Cannot start recording.",
+                );
+                cancel();
+            }
         }
     }
 
-    /** One button, three states: record, stop, or cancel the transcription in flight. */
-    const tap = () => {
+    function tap() {
         if (!session) {
             start();
-
-            return;
-        }
-
-        if (session.phase === "recording") {
+        } else if (session.phase === "recording") {
             stop();
-
-            return;
+        } else {
+            cancel();
         }
+    }
 
-        pocket.notify("info", "Dictation cancelled.");
-        cancel();
+    const hidden = () => {
+        if (document.hidden) {
+            if (session?.phase === "permission") {
+                cancel();
+            } else {
+                stop();
+            }
+        }
+    };
+    const leave = () => cancel();
+    const submitted = (event) => {
+        if (session && event.target.contains?.(session.box)) {
+            cancel();
+        }
+    };
+    const sendClick = (event) => {
+        if (session && event.target.closest?.('[data-part~="send-button"]')) {
+            cancel();
+        }
+    };
+    const sendKey = (event) => {
+        if (
+            session &&
+            event.target === session.box &&
+            event.key === "Enter" &&
+            !event.shiftKey &&
+            !event.isComposing
+        ) {
+            cancel();
+        }
     };
 
-    // Hiding the tab stops the recording; the transcript is waiting when the person returns.
-    document.addEventListener("visibilitychange", () => {
-        if (document.hidden && session?.phase === "recording") {
-            stop();
-        }
-    });
+    document.addEventListener("visibilitychange", hidden);
+    window.addEventListener("pagehide", leave);
+    document.addEventListener("submit", submitted, true);
+    document.addEventListener("click", sendClick, true);
+    document.addEventListener("keydown", sendKey, true);
 
     function AudioSettings() {
         const [value, setValue] = useState(engine);
@@ -293,19 +503,23 @@ export default function setup(pocket) {
                 id="voice-settings-engine"
                 value=${value}
                 onChange=${(event) => {
-                    const next = event.currentTarget.value;
-
-                    localStorage.setItem(ENGINE_KEY, next);
-                    setValue(next);
+                    localStorage.setItem(ENGINE_KEY, event.currentTarget.value);
+                    setValue(event.currentTarget.value);
                 }}
             >
                 <option value="mistral">Mistral · Voxtral Mini Transcribe 3</option>
                 <option value="local">Local · Whisper (adaptive)</option>
             </select>
-            <p class="muted small">${ABOUT[value]}</p>
             <p class="muted small">
-                Recordings are held in memory and never written to disk. Only the text you keep
-                reaches the message box; nothing is sent until you send it.
+                ${
+                    value === "mistral"
+                        ? "Audio goes to Mistral. The live preview ($0.008/min) plus the final pass ($0.0035/min) costs about $0.0115 per recorded minute on your API credits."
+                        : "Audio stays on this server. Whisper uses a GPU model when available, otherwise a small CPU model."
+                }
+            </p>
+            <p class="muted small">
+                Words appear while you speak. The full recording is transcribed again when you stop.
+                Your manual edits are never replaced.
             </p>
         </div>`;
     }
@@ -320,5 +534,13 @@ export default function setup(pocket) {
         run: tap,
     });
 
-    return () => cancel();
+    return () => {
+        cancel();
+        disposed = true;
+        document.removeEventListener("visibilitychange", hidden);
+        window.removeEventListener("pagehide", leave);
+        document.removeEventListener("submit", submitted, true);
+        document.removeEventListener("click", sendClick, true);
+        document.removeEventListener("keydown", sendKey, true);
+    };
 }

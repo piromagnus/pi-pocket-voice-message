@@ -61,7 +61,7 @@ def transcribe(model, name, device):
     segments, _ = model.transcribe(
         audio,
         language="fr",
-        beam_size=5,
+        beam_size=1 if os.environ.get("VOICE_PREVIEW") else 5,
         vad_filter=True,
         condition_on_previous_text=False,
     )

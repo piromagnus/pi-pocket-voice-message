@@ -1,55 +1,85 @@
 {
-"name": "voice-message",
-"title": "Voice message",
-"description": "Dictate a message: record with the mic, transcribe with Mistral Voxtral or local Whisper (a GPU model, or a small CPU model that any machine can run), review the text, and insert it as a draft. Never sends automatically. The local engine builds its own pinned Python runtime beside the module at first use (uv or python3-venv, faster-whisper and the small model from pinned revisions); audio stays on the server unless the owner picks Mistral, whose key is read only on the server.",
-"tags": ["voice", "dictation", "whisper", "transcription", "mistral"],
-"author": { "name": "piromagnus", "github": "piromagnus" },
-"version": "1.0.0",
-"source": {
-"repo": "piromagnus/pi-pocket-voice-message",
-"commit": "6c8db15b5c77b73a682533d2357370d3bea1d001",
-"path": ""
-},
-"files": [
-{
-"name": "voice-message.ts",
-"sha256": "b9808fc5ff4f05402d083e4608f455c8cdaf06ba75d0a0d2e426da1731dff9f5",
-"size": 15485
-},
-{
-"name": "voice-message/index.js",
-"sha256": "3fe0fde0ff786df42663c8e784996050197518b50903f19f7456614618d5abfe",
-"size": 13079
-},
-{
-"name": "voice-message/style.css",
-"sha256": "66918db7126d0c01e5ebd4094380dfc864d4ed725571848a5bb08fe4691a0d14",
-"size": 720
-},
-{
-"name": "voice-message/transcribe.py",
-"sha256": "21327106109b6402e4c2642efb6399f64da076f1e72b7340244d1ea13a27f5e3",
-"size": 3661
-},
-{
-"name": "voice-message/requirements.lock",
-"sha256": "05b68aca3c2cb48cdd9617b911d8e2c618b8842c155173bdf0f99cab379d6caa",
-"size": 384
-}
-],
-"pocketApi": 1,
-"minPocket": "0.19.0",
-"declares": {
-"extensions": [],
-"tools": [],
-"readOnlyTools": [],
-"hooks": [],
-"sections": [],
-"wraps": [],
-"routes": ["POST transcribe"],
-"client": "owner",
-"access": "owner",
-"commands": []
-},
-"revoked": []
+ "name": "voice-message",
+ "title": "Voice message",
+ "description": "Dictate a message: tap the mic and the words appear in the message box while you speak (Mistral Voxtral Realtime, or local Whisper in short chunks), then a full pass corrects them when you stop. Never sends automatically and never overwrites your edits. Local Whisper runs on a GPU model or a small CPU model, so any machine works; its pinned Python runtime is built beside the module at first use (uv or python3-venv, faster-whisper and the small model from pinned revisions). The server holds the Mistral connection, and the key is read only on the server.",
+ "tags": [
+  "voice",
+  "dictation",
+  "whisper",
+  "transcription",
+  "mistral"
+ ],
+ "author": {
+  "name": "piromagnus",
+  "github": "piromagnus"
+ },
+ "version": "1.2.0",
+ "source": {
+  "repo": "piromagnus/pi-pocket-voice-message",
+  "commit": "5992093db1005e5eaa96cb8bcf0b7a3db8c5ab46",
+  "path": ""
+ },
+ "files": [
+  {
+   "name": "voice-message.ts",
+   "sha256": "baee494ec3ce3c3007b0a1490e240d95aa56a57fb204403bfccb9643c031ef5e",
+   "size": 37864
+  },
+  {
+   "name": "voice-message/index.js",
+   "sha256": "12bcb3e74dbd48b674187e86c6c530d2080781b094ca198b2d0a6518d4af5c51",
+   "size": 17000
+  },
+  {
+   "name": "voice-message/draft.js",
+   "sha256": "09363d6a063df2a088e21a29ed369d72410d54072e6daa989a2b4dcdb1ef435d",
+   "size": 4119
+  },
+  {
+   "name": "voice-message/live.js",
+   "sha256": "b7333777f84953883e7eb8e26f87fe58ea898d3bcd60c5cfd593918d1719be8a",
+   "size": 7735
+  },
+  {
+   "name": "voice-message/pcm-worklet.js",
+   "sha256": "3e317192162aa184704a2570db2300be3ac394d6233341a39b687199477d2cff",
+   "size": 2024
+  },
+  {
+   "name": "voice-message/style.css",
+   "sha256": "e81c95b55629efc01731c9770df3d431ea5d167384489f93d0c4a6707ac25e95",
+   "size": 275
+  },
+  {
+   "name": "voice-message/transcribe.py",
+   "sha256": "e0550e8d0f01b7b05c2a6ae9d5d35ab5f0c95707a23899275682145a6cbdbb69",
+   "size": 3701
+  },
+  {
+   "name": "voice-message/requirements.lock",
+   "sha256": "05b68aca3c2cb48cdd9617b911d8e2c618b8842c155173bdf0f99cab379d6caa",
+   "size": 384
+  }
+ ],
+ "pocketApi": 1,
+ "minPocket": "0.19.0",
+ "declares": {
+  "extensions": [],
+  "tools": [],
+  "readOnlyTools": [],
+  "hooks": [],
+  "sections": [],
+  "wraps": [],
+  "routes": [
+   "POST transcribe",
+   "POST live/start",
+   "POST live/audio",
+   "POST live/end",
+   "POST live/cancel"
+  ],
+  "client": "owner",
+  "access": "owner",
+  "commands": []
+ },
+ "revoked": []
 }

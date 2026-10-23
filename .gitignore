@@ -1,0 +1,6 @@
+node_modules/
+_pocket.d.ts
+_voice-message/*
+!_voice-message/fixtures/
+__pycache__/
+*.pyc

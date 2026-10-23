@@ -1,58 +1,93 @@
-# voice-message
+# Voice message for Pi Pocket
 
-Dictate a message in [Pi Pocket](https://github.com/TannerMidd/pi-pocket), like Claude Code on Android: tap the mic beside the message box, speak, tap again — the transcript lands straight in the message box, where you edit it and send it yourself. No popup, and nothing is ever sent automatically.
+Tap the microphone beside the message box and speak. A live preview appears in the box while recording continues. Tap again to stop: a full-recording transcription replaces the preview with the corrected text. Review, edit, and send the message yourself. Nothing is sent automatically.
 
-The transcription model is picked in **Menu → Audio settings**:
+## Audio settings
 
-- **Mistral — Voxtral Mini Transcribe 3** (`voxtral-mini-transcribe-3-0`, `language=fr`): the official [Mistral transcription API](https://docs.mistral.ai/models/voxtral-mini-transcribe-3-0), $0.0035/min. The key is read only on the server: `MISTRAL_API_KEY`, or the `mistral` entry of Pi's `auth.json`. No other endpoint is used, and there is no retry or silent fallback to another provider.
-- **Local — Whisper, adaptive**: the large `large-v3-turbo` model on the server's GPU when one is available, otherwise the small model on the CPU — so it works on any machine. Audio never leaves the server.
+Pick a transcription engine in **Menu → Audio settings**. The choice stays in this browser.
 
-The choice is kept per browser, and the mic button always shows what is going on: the button itself becomes the stop control while recording, and a line under the message box says `Recording…` or `Transcribing…`. A tap during transcription cancels it.
+- **Mistral**: **Voxtral Mini Transcribe Realtime 3** (`voxtral-mini-transcribe-realtime-3`) streams the words while you speak, then **Voxtral Mini Transcribe 3** (`voxtral-mini-transcribe-3-0`) transcribes the whole recording for the final correction. French is pinned. At the published rates ($0.008/min realtime, $0.0035/min file) this costs about **$0.0115 per recorded minute** (provider billing rules apply). Audio is sent to Mistral. The key stays on the server: `MISTRAL_API_KEY`, or Pi's `mistral` API-key entry in `auth.json`. Credential commands are never executed. No OpenRouter, automatic retry, or automatic provider fallback.
+- **Local · Whisper (adaptive)**: preview uses **Whisper small on CPU**, with faster decoding. The final pass uses **large-v3-turbo on CUDA** when installed and available, otherwise **Whisper small on CPU**. No cloud API call or per-minute fee. Audio stays on the Pi Pocket server; CPU/GPU and electricity are still needed.
 
-## Self-contained runtime
+The interface and errors are in English. Speech recognition currently uses **French**; an English interface does not imply English speech detection.
 
-The local engine needs nothing prepared. At its first use, the extension builds a Python environment beside the module, in `_voice-message/`:
+## How live preview works
 
-- a virtual environment created with `uv` (or `python3 -m venv`), with the pinned packages `faster-whisper==1.2.1` and `av==19.0.2`;
-- the small Whisper model (MIT, [Systran/faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small), pinned revision), downloaded once, about 465 MB.
+**Mistral: true streaming.** The browser may only talk to its own Pi Pocket server (the app's content security policy is `connect-src 'self'`), so it cannot open Mistral's WebSocket itself. Instead, the **server** holds one WebSocket to `wss://api.mistral.ai/v1/audio/transcriptions/realtime`, configured for 16 kHz PCM, French, and a 480 ms delay. The browser captures the microphone with an `AudioWorklet`, converts it to 16 kHz mono PCM, and sends it in 400 ms requests. The server relays each piece of text back to the person's own tabs as a `live` event (`web.send`, addressed to that person only). Words arrive as Mistral writes them, with no chunk boundaries. After Stop, the server ends the session, and the whole recording is transcribed once more for the correction.
 
-Everything the extension ships is in this repository; the runtime folder is machine-local and never listed in the gallery entry. A machine with an NVIDIA GPU and CUDA can drop a faster-whisper `large-v3-turbo` model into `_voice-message/model/` and set `"gpu"` in `_voice-message/config.json` to use it; nothing changes for anyone else.
+**Local: chunked near-live.** Local Whisper cannot stream, so every 3 seconds a second native `MediaRecorder` completes an independently decodable audio file. Preview requests run sequentially. The complete recording is kept in parallel and sent once for the final correction at Stop.
 
-## Limits and privacy
+This deliberately reuses the existing STT engines and route. It does not upload the growing full recording repeatedly. Preview costs roughly one extra pass over the audio, rather than quadratic repeated uploads. Short chunks can split a word or lose context; the final pass transcribes the original complete audio and corrects these errors.
 
-- Recordings run up to about 5 minutes (16 kbit/s Opus) and 700 KB — the size comes from Pi Pocket's 1 MB limit on a route's JSON body, which the base64 audio must fit in. The recording stops on its own at either cap.
-- The route is owner-only (`access: "owner"`), one transcription at a time (429), 90 s (Mistral) or 290 s (local) budget. On a slow machine, the longest recordings may reach that budget first.
-- Recordings are held in memory, never written to disk, never added to a conversation; only the text you keep reaches the message draft. Switching conversation while a transcript is in flight inserts nothing and says why.
-- With Mistral, the audio goes to Mistral's API, as Audio settings says. Local audio stays on the server.
-- The browser needs HTTPS (or a secure localhost) and microphone permission; the local engine needs `uv` or `python3-venv` on the server (Linux/macOS paths).
+Measured once each, on one public French sample of 10.86 seconds, in real Chromium:
 
-## Measured once, not a ranking
+- **Mistral, real service:** first words after **3.5 s**; **21 text updates while the clip was still playing**, the last at 10.6 s; the final text was exact, including the plural agreements.
+- **Local Whisper:** first text after about **5.3 s**, then updates every 3 s; the full correction finished about 4 s after Stop.
 
-On one public French clip (FLEURS, 10.86 s): Mistral answered in 1.38 s; local GPU transcribed in 2.33 s (plus a 3.6 s model load); the small model on CPU took 1.58 s. These are single samples on one machine and network — not a general quality ranking.
+These are single measurements on one server and one network, not latency guarantees or a quality benchmark. The first words of Mistral's stream trail the speech by a few seconds: that is the service's own latency plus the time to send audio, not a delay added here.
 
-## Files
+### Protecting your draft
 
-- `voice-message.ts` — the server module: the transcription route, engine dispatch, key resolution, runtime bootstrap.
-- `voice-message/index.js` — the browser module: the mic button, recording, the status line, Audio settings.
-- `voice-message/style.css` — mobile-first styles using the app's theme tokens.
-- `voice-message/transcribe.py` — the offline worker: audio from stdin, adaptive model pick, text to stdout.
-- `voice-message/requirements.lock` — the full freeze of the tested Python environment.
+Only the extension-owned dictated span is replaced. Existing text, edits before or after that span, selection, and draft saving are preserved.
+
+**If you manually edit the dictated span, automatic replacement of that span pauses for the rest of that recording**, including the final correction. Your words win; late responses cannot overwrite them. For uninterrupted preview, make corrections after Stop. Preview text is retained if transcription fails or is cancelled.
+
+Changing conversation/account, sending the message, closing the page, losing the composer, or disabling the extension cancels dictation and stops microphone tracks. A permission response that arrives after cancellation is immediately released. Hiding the tab stops the recording and requests its final transcription. There is no dictation popup.
+
+### Extension-only compatibility
+
+Pi Pocket's public `insertText` API can append but cannot revise an earlier insertion. The extension therefore locates the textarea under the documented `data-part="composer"` region and sends ordinary bubbling `input` events. This uses the same draft-saving path as typing; there are **no core imports, internal store writes, prototype patches, or automatic send actions**.
+
+The owned-range adapter is isolated in `voice-message/draft.js` and tested with both unit tests and the real Preact composer. A future public replace-range API would remove this DOM dependency. If the expected writable composer is unavailable, dictation refuses to start.
+
+## Local installation
+
+Install the drop-in module and its `voice-message/` folder, then enable it in Extensions. All shipped runtime code lives in those files. Machine-specific environments and weights live separately in `_voice-message/`, which is never served to browsers or included in a gallery entry.
+
+At first local use, the extension prepares a Python virtual environment using **uv** or **python3 with venv/pip**. It installs `faster-whisper==1.2.1` and `av==19.0.2`. These top-level versions are pinned; `requirements.lock` records the fully resolved environment tested here, but bootstrap does not lock every transitive dependency.
+
+The small model is downloaded once from `Systran/faster-whisper-small`, revision `536b0662742c02347bc0e980a01041f333bce120` (MIT, approximately 465 MB). Initial setup needs network access to Python package indexes and Hugging Face; subsequent transcription with cached weights does not need network access. Failed/cancelled setup is retried on the next explicit request, without trusting a half-created interpreter.
+
+For the optional final GPU model, put CTranslate2 `large-v3-turbo` weights in `_voice-message/model/` and configure the GPU index in `_voice-message/config.json`, for example `{"gpu": 0}`. The tested conversion is `mobiuslabsgmbh/faster-whisper-large-v3-turbo`, revision `0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf`. CUDA 12/cuDNN 9 are needed. If unavailable, the final pass uses the small CPU model. Neither Python nor CUDA is bundled; this is not universal hardware compatibility.
+
+## Limits
+
+- HTTPS or a secure loopback origin, microphone permission, and native `MediaRecorder` support are required.
+- A recording stops after 5 minutes. Its compressed file must stay below 700 KB to fit Pi Pocket's 1 MB JSON limit after base64 encoding. Some browsers ignore the requested 16 kbit/s bitrate and can reach the size limit sooner; in that case the preview is retained and an error explains the limit.
+- Requests are owner-only, one transcription at a time, with a 90-second Mistral or 290-second local timeout. A final pass waits for an in-flight preview to release the shared lock.
+- Slow preview processing is bounded to 2 queued chunks. If the device/service cannot keep up, preview stops with a warning and the final pass still uses the complete recording.
+- Some browsers/devices do not support two concurrent recorders; they fall back to the final-only flow with a visible warning. Chromium is tested; physical Android/iOS microphones and Safari are not yet verified.
+- Audio stays in memory, never in a recording file or conversation. Only the draft text enters normal Pi Pocket storage. Mistral applies its own service terms; cancelling a submitted cloud request does not guarantee no charge.
 
 ## Tests
 
-Run against a Pi Pocket checkout (`PI_POCKET_REPO`, default `/home/pmarrec/pi-pocket`):
+Node 22+ is required for direct TypeScript execution. No npm packages are needed to run the unit tests:
 
 ```sh
-node --test _voice-message*.test.ts
+npm run check
+npm test
 ```
 
-- `_voice-message.test.ts` — the whole app in Chromium at phone size: tap-to-record straight into the message box (real local transcription of the sample clip), no popup, the stop/cancel button states, the status line, conversation switching, a blocked microphone, Audio settings from the menu, route access (guest 404, missing header 403, bad audio 400, oversized 413), and the extension turning off mid-recording. The microphone is simulated; the model is real.
-- `_voice-message-api.test.ts` — the Mistral transport with a local fake: exact endpoint and model, key resolution (including a command-style key that must never run), no retries, secrets never surfaced in errors, cancellation, and the shared one-at-a-time lock. No billable calls.
-- `_voice-message-light.test.ts` — the Python engines directly: the adaptive GPU pick, the small CPU model, and the audio limits. Skips until a local runtime exists.
-- `_voice-message-bootstrap.test.ts` — a clean install with only the gallery's files: the extension builds its Python runtime, downloads the small model, and transcribes.
+Unit tests cover draft ownership, revisions, prefix/suffix edits, protected manual corrections, duplicate text, clearing/sending, IME composition, selection, teardown, Mistral request shape and credentials, bounded responses, cancellation, concurrency, and preview/final validation. Mistral transport is mocked; these tests do not incur API charges or read real credentials.
 
-The test clip `_voice-message/fixtures/french.wav` is utterance 118005971910520590 of Google FLEURS `fr_fr` ([CC-BY 4.0](https://huggingface.co/datasets/google/fleurs)); reference: « Premièrement, la plupart des cavaliers portent des bottes d'équitation avec un talon et une semelle lisse et assez étroite. »
+For real-app and offline-model tests, provide a Pi Pocket checkout and an optional prepared local runtime:
 
-## License
+```sh
+PI_POCKET_REPO=/path/to/pi-pocket \
+VOICE_TEST_RUNTIME=/path/to/extensions/_voice-message \
+npm run test:integration
+```
 
-MIT. The Whisper models are MIT-licensed ([faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Systran/faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small)); Mistral's service is governed by [Mistral's terms](https://docs.mistral.ai/).
+The clean-install test creates its own Python environment and downloads weights if absent. The native-recording test uses a real Web Audio stream, native Chromium `MediaRecorder`, and real Whisper. It proves preview text appears before Stop and that the full final pass corrects it, without sending a message to a model. Another Chromium test mocks STT to cover slow responses, final corrections, manual edits, cancellation, sending, navigation, permissions, errors, and extension disposal. GPU-only assertions require `VOICE_TEST_GPU=1` and a prepared CUDA model; otherwise they skip.
+
+The fixture `_voice-message/fixtures/french.wav` comes from the public `podscripter-project/test-fixtures` copy of Google FLEURS `fr_fr`, utterance `118005971910520590` (CC-BY 4.0). Reference: “Premièrement, la plupart des cavaliers portent des bottes d'équitation avec un talon et une semelle lisse et assez étroite.”
+
+## License and sources
+
+MIT — Copyright (c) 2026 Pierre Marrec.
+
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+- [Whisper small weights](https://huggingface.co/Systran/faster-whisper-small)
+- [Mistral transcription model and pricing](https://docs.mistral.ai/models/voxtral-mini-transcribe-3-0)
+- [FLEURS dataset](https://huggingface.co/datasets/google/fleurs)
+- [Audio fixture](https://huggingface.co/datasets/podscripter-project/test-fixtures)
