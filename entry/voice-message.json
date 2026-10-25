@@ -16,19 +16,19 @@
  "version": "1.3.0",
  "source": {
   "repo": "piromagnus/pi-pocket-voice-message",
-  "commit": "abb45512e017b8ca7d6820028b8afcd33c4efc60",
+  "commit": "ef3c58789956af959dce5aef3bae3d5ffef38985",
   "path": ""
  },
  "files": [
   {
    "name": "voice-message.ts",
-   "sha256": "baee494ec3ce3c3007b0a1490e240d95aa56a57fb204403bfccb9643c031ef5e",
-   "size": 37864
+   "sha256": "d9a268dc1efc20a916d95e37329adc9d0bd2a9db606990dfad59212ec9c8c57c",
+   "size": 39048
   },
   {
    "name": "voice-message/index.js",
-   "sha256": "12bcb3e74dbd48b674187e86c6c530d2080781b094ca198b2d0a6518d4af5c51",
-   "size": 17000
+   "sha256": "ffb6bfa4f5fd47cc45ce0219f73ab2417a686bc41bedefd89d0e71256bea9621",
+   "size": 17634
   },
   {
    "name": "voice-message/draft.js",
@@ -52,13 +52,18 @@
   },
   {
    "name": "voice-message/transcribe.py",
-   "sha256": "e0550e8d0f01b7b05c2a6ae9d5d35ab5f0c95707a23899275682145a6cbdbb69",
-   "size": 3701
+   "sha256": "7bee176c472e74dc743808903a1bdf4d96f3a16af15ea375c16b9dbc93802956",
+   "size": 3735
   },
   {
    "name": "voice-message/requirements.lock",
-   "sha256": "05b68aca3c2cb48cdd9617b911d8e2c618b8842c155173bdf0f99cab379d6caa",
-   "size": 384
+   "sha256": "5c72d68ce61e069ad9ff258e7452ec1e280c211aa8336964bdb7a0cd05ceab41",
+   "size": 27179
+  },
+  {
+   "name": "voice-message/requirements.in",
+   "sha256": "7ae77ecafc5a114aa9664833a79f8749050c45d6eb3318e8b8c5da8600936ec3",
+   "size": 33
   }
  ],
  "pocketApi": 1,
