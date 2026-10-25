@@ -16,19 +16,19 @@
  "version": "1.4.0",
  "source": {
   "repo": "piromagnus/pi-pocket-voice-message",
-  "commit": "ef3c58789956af959dce5aef3bae3d5ffef38985",
+  "commit": "617f70d17902d902e3bc3a2b0ee413a1585b959c",
   "path": ""
  },
  "files": [
   {
    "name": "voice-message.ts",
-   "sha256": "d9a268dc1efc20a916d95e37329adc9d0bd2a9db606990dfad59212ec9c8c57c",
-   "size": 39048
+   "sha256": "159d5cd0ebea24174a427f159b18c014e6a776cb28e2dbab80b8a1ba02e17829",
+   "size": 40246
   },
   {
    "name": "voice-message/index.js",
-   "sha256": "ffb6bfa4f5fd47cc45ce0219f73ab2417a686bc41bedefd89d0e71256bea9621",
-   "size": 17634
+   "sha256": "478e3d1160c212dd0da335389350760d77d5cfc8237781c7e0266891c84f12bc",
+   "size": 19383
   },
   {
    "name": "voice-message/draft.js",
@@ -37,8 +37,8 @@
   },
   {
    "name": "voice-message/live.js",
-   "sha256": "b7333777f84953883e7eb8e26f87fe58ea898d3bcd60c5cfd593918d1719be8a",
-   "size": 7735
+   "sha256": "0e6a56fe80c9b2f739f705389f3d2b8a9113ea99c264973929bd058175cb222b",
+   "size": 7755
   },
   {
    "name": "voice-message/pcm-worklet.js",
@@ -52,8 +52,8 @@
   },
   {
    "name": "voice-message/transcribe.py",
-   "sha256": "7bee176c472e74dc743808903a1bdf4d96f3a16af15ea375c16b9dbc93802956",
-   "size": 3735
+   "sha256": "21702ca482f16a90175a103d975a50348422b4fa83d395b5e34c141bedacf82a",
+   "size": 3898
   },
   {
    "name": "voice-message/requirements.lock",
