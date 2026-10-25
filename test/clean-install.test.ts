@@ -14,7 +14,7 @@ const { cleanUp, newSession, openApp, owner, root, scriptedModel } = await impor
 );
 const { createHandler } = await import(pathToFileURL(join(PI_POCKET, "src/server/http.ts")).href);
 
-const source = fileURLToPath(new URL(".", import.meta.url));
+const source = fileURLToPath(new URL("..", import.meta.url));
 
 test("clean install: the extension builds its Python runtime and transcribes with the small model", async () => {
     const dropIns = join(root, "data", "extensions");

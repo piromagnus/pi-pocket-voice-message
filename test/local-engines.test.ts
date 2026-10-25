@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { test } from "node:test";
 
-const source = fileURLToPath(new URL(".", import.meta.url));
+const source = fileURLToPath(new URL("..", import.meta.url));
 const runtime = process.env.VOICE_TEST_RUNTIME ?? join(source, "_voice-message");
 const python = join(runtime, ".venv", "bin", "python");
 // The Python engines need this machine's prepared runtime; other machines get it at their first transcription.

@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import voiceMessage from "./voice-message.ts";
+import voiceMessage from "../voice-message.ts";
 
 test("Mistral: saved key, exact model, no retries, safe errors, cancellation and concurrency", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "voice-api-"));
