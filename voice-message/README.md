@@ -4,12 +4,13 @@ Tap the microphone beside the message box and speak. A live preview appears in t
 
 ## Audio settings
 
-Pick a transcription engine in **Menu → Audio settings**. The choice stays in this browser.
+Pick an engine in **Menu → Audio settings**. The choice stays in this browser, and Mistral live is the default.
 
-- **Mistral**: **Voxtral Mini Transcribe Realtime 3** (`voxtral-mini-transcribe-realtime-3`) streams the words while you speak, then **Voxtral Mini Transcribe 3** (`voxtral-mini-transcribe-3-0`) transcribes the whole recording for the final correction. French is pinned. At the published rates ($0.008/min realtime, $0.0035/min file) this costs about **$0.0115 per recorded minute** (provider billing rules apply). Audio is sent to Mistral. The key stays on the server: `MISTRAL_API_KEY`, or Pi's `mistral` API-key entry in `auth.json`. Credential commands are never executed. No OpenRouter, automatic retry, or automatic provider fallback.
-- **Local · Whisper (adaptive)**: preview uses **Whisper small on CPU**, with faster decoding. The final pass uses **large-v3-turbo on CUDA** when installed and available, otherwise **Whisper small on CPU**. No cloud API call or per-minute fee. Audio stays on the Pi Pocket server; CPU/GPU and electricity are still needed.
+- **Mistral · Voxtral Realtime 3 (live)**: words appear while you speak, streamed by `voxtral-mini-transcribe-realtime-3`. When you stop, `voxtral-mini-transcribe-3-0` transcribes the whole recording once more and corrects the text. French is pinned. At the published rates ($0.008/min realtime plus $0.0035/min for the correction) this costs about **$0.0115 per recorded minute** (provider billing rules apply). Audio is sent to Mistral. The key stays on the server: `MISTRAL_API_KEY`, or Pi's `mistral` API-key entry in `auth.json`. Credential commands are never executed. No OpenRouter, automatic retry, or automatic provider fallback.
+- **Mistral · Voxtral Mini Transcribe 3 (after you stop)**: nothing appears while you speak; the whole recording is transcribed once, at **$0.0035/min**. The cheapest cloud option, and the one that opens no live session.
+- **Local · Whisper**: short chunks appear while you speak (Whisper small on CPU, with faster decoding), then the whole recording is transcribed again when you stop with **large-v3-turbo on CUDA** when installed and available, otherwise Whisper small on CPU. No cloud API call or per-minute fee. Audio stays on the Pi Pocket server; CPU/GPU and electricity are still needed.
 
-The interface and errors are in English. Speech recognition currently uses **French**; an English interface does not imply English speech detection.
+The interface and errors are in English. Speech recognition is pinned to **French**; set `VOICE_MESSAGE_LANGUAGE` (ISO 639, such as `en` or `de`) on the server to transcribe another language. It applies to the live session, the file pass, and the local engine.
 
 ## How live preview works
 
@@ -44,9 +45,9 @@ The owned-range adapter is isolated in `voice-message/draft.js` and tested with 
 
 Install the drop-in module and its `voice-message/` folder, then enable it in Extensions. All shipped runtime code lives in those files. Machine-specific environments and weights live separately in `_voice-message/`, which is never served to browsers or included in a gallery entry.
 
-At first local use, the extension prepares a Python virtual environment using **uv** or **python3 with venv/pip**. It installs `faster-whisper==1.2.1` and `av==19.0.2`. These top-level versions are pinned; `requirements.lock` records the fully resolved environment tested here, but bootstrap does not lock every transitive dependency.
+At first local use, the extension prepares a Python virtual environment using **uv** or **python3 with venv/pip**. It installs exactly what `voice-message/requirements.lock` says: every package pinned by version **and SHA-256**, with `--require-hashes` enforced (generated with `uv pip compile --universal --generate-hashes` from `voice-message/requirements.in`). A new lock re-installs; a stale install never passes for a fresh one. The download is about **900 MB**: the Python packages (about 425 MB, from PyPI — `pypi.org` and `files.pythonhosted.org`) and the small Whisper model (about 465 MB, from `huggingface.co`).
 
-The small model is downloaded once from `Systran/faster-whisper-small`, revision `536b0662742c02347bc0e980a01041f333bce120` (MIT, approximately 465 MB). Initial setup needs network access to Python package indexes and Hugging Face; subsequent transcription with cached weights does not need network access. Failed/cancelled setup is retried on the next explicit request, without trusting a half-created interpreter.
+The small model is downloaded once from `Systran/faster-whisper-small`, pinned to revision `536b0662742c02347bc0e980a01041f333bce120` (MIT). A revision cannot change, so what runs is what the reviewed commit decided. Initial setup needs network access to Python package indexes and Hugging Face; subsequent transcription with cached weights does not need network access. Failed/cancelled setup is retried on the next explicit request, without trusting a half-created interpreter.
 
 For the optional final GPU model, put CTranslate2 `large-v3-turbo` weights in `_voice-message/model/` and configure the GPU index in `_voice-message/config.json`, for example `{"gpu": 0}`. The tested conversion is `mobiuslabsgmbh/faster-whisper-large-v3-turbo`, revision `0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf`. CUDA 12/cuDNN 9 are needed. If unavailable, the final pass uses the small CPU model. Neither Python nor CUDA is bundled; this is not universal hardware compatibility.
 

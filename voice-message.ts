@@ -1,5 +1,8 @@
-/** Dictate a message: adaptive local Whisper (GPU, or a small CPU model for any machine) or Mistral Voxtral, inserted as a draft, never sent automatically. */
-import { spawn, type ChildProcess } from "node:child_process";
+/** Dictate a message: words appear in the message box while you speak and a full pass corrects them when you stop; nothing is sent automatically and your edits are never overwritten. Mistral engines send audio to api.mistral.ai (Voxtral Realtime 3, then Mini Transcribe 3; key read only on the server from MISTRAL_API_KEY or Pi's mistral auth.json entry). Local Whisper keeps audio on the server; its first use installs pinned packages from PyPI with enforced hashes and the revision-pinned Whisper small model from huggingface.co, about 900 MB. French is pinned; VOICE_MESSAGE_LANGUAGE overrides. */ import {
+    spawn,
+    type ChildProcess,
+} from "node:child_process";
+import { createHash } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -18,7 +21,6 @@ const MAX_REALTIME_TOTAL_BYTES = 5 * 60 * 16_000 * 2; // 5 minutes of 16kHz 16-b
 const START_TIMEOUT_MS = 10_000;
 const END_TIMEOUT_MS = 20_000;
 /** The Python engine and its one audio dependency, pinned. Keep `voice-message/requirements.lock` in step. */
-const PINS = ["faster-whisper==1.2.1", "av==19.0.2"];
 const venvs = new Map<string, Promise<string>>();
 
 /**
@@ -118,34 +120,39 @@ function run(command: string, args: string[], signal: AbortSignal): Promise<void
  * A Python environment with the local engine, beside the module in `_voice-message/`. Created at the first local
  * use with `uv`, or a plain `python3 -m venv`: the transcription works for anyone, not only this machine.
  */
-export async function ensureVenv(runtime: string, signal: AbortSignal): Promise<string> {
+export async function ensureVenv(
+    runtime: string,
+    lock: string,
+    signal: AbortSignal,
+): Promise<string> {
     const pending = venvs.get(runtime);
 
     if (pending !== undefined) {
         return pending;
     }
 
-    const setup = setupVenv(runtime, signal).finally(() => venvs.delete(runtime));
+    const setup = setupVenv(runtime, lock, signal).finally(() => venvs.delete(runtime));
 
     venvs.set(runtime, setup);
 
     return setup;
 }
 
-async function setupVenv(runtime: string, signal: AbortSignal): Promise<string> {
+async function setupVenv(runtime: string, lock: string, signal: AbortSignal): Promise<string> {
     const venv = join(runtime, ".venv");
     const python = join(venv, "bin", "python");
     const marker = join(venv, ".ready");
-    const pins = PINS.join("\n") + "\n";
+    // The marker is the lock's own SHA-256: a new lock re-installs, and a stale install never passes for a fresh one.
+    const stamp = createHash("sha256").update(readFileSync(lock)).digest("hex");
 
-    if (existsSync(python) && existsSync(marker) && readFileSync(marker, "utf8") === pins) {
+    if (existsSync(python) && existsSync(marker) && readFileSync(marker, "utf8") === stamp) {
         return python;
     }
 
     if (existsSync(python)) {
         try {
             await run(python, ["-c", "import faster_whisper, av"], signal);
-            writeFileSync(marker, pins);
+            writeFileSync(marker, stamp);
 
             return python;
         } catch {
@@ -161,9 +168,13 @@ async function setupVenv(runtime: string, signal: AbortSignal): Promise<string> 
             await run(uv, ["venv", "--python", "python3", venv], signal);
         }
 
-        await run(uv, ["pip", "install", "--python", python, ...PINS], signal);
+        await run(
+            uv,
+            ["pip", "install", "--python", python, "--require-hashes", "-r", lock],
+            signal,
+        );
     } else if (existsSync(python)) {
-        await run(python, ["-m", "pip", "install", ...PINS], signal);
+        await run(python, ["-m", "pip", "install", "--require-hashes", "-r", lock], signal);
     } else {
         const python3 = onPath("python3");
 
@@ -172,11 +183,11 @@ async function setupVenv(runtime: string, signal: AbortSignal): Promise<string> 
         }
 
         await run(python3, ["-m", "venv", venv], signal);
-        await run(join(venv, "bin", "pip"), ["install", ...PINS], signal);
+        await run(join(venv, "bin", "pip"), ["install", "--require-hashes", "-r", lock], signal);
     }
 
     await run(python, ["-c", "import faster_whisper, av"], signal);
-    writeFileSync(marker, pins);
+    writeFileSync(marker, stamp);
 
     return python;
 }
@@ -241,10 +252,19 @@ async function mistralKey(agentDir: string): Promise<string> {
     return configured;
 }
 
+/** The transcription language: ISO 639 (2 or 3 lowercase letters), French by default. */
+function language(): string {
+    const value = process.env.VOICE_MESSAGE_LANGUAGE?.trim().toLowerCase();
+
+    return /^[a-z]{2,3}$/.test(value ?? "") ? value! : "fr";
+}
+
 export default function voiceMessage(host: Host, web: Web) {
     const moduleDir = dirname(fileURLToPath(import.meta.url));
     const runtime = join(moduleDir, "_voice-message");
     const script = join(moduleDir, "voice-message", "transcribe.py");
+    const lock = join(moduleDir, "voice-message", "requirements.lock");
+    const lang = language();
     const disposed = new AbortController();
     let running: ChildProcess | null = null;
     let busy = false;
@@ -335,7 +355,7 @@ export default function voiceMessage(host: Host, web: Web) {
                         }),
                     );
                     form.set("model", MISTRAL_MODEL);
-                    form.set("language", "fr");
+                    form.set("language", lang);
 
                     let response: Response;
 
@@ -442,7 +462,7 @@ export default function voiceMessage(host: Host, web: Web) {
                 let python: string;
 
                 try {
-                    python = await ensureVenv(runtime, stop);
+                    python = await ensureVenv(runtime, lock, stop);
                 } catch (error) {
                     if (stop.aborted) {
                         throw web.error(408, "The transcription was cancelled.");
@@ -466,6 +486,7 @@ export default function voiceMessage(host: Host, web: Web) {
                         env: {
                             ...process.env,
                             VOICE_RUNTIME: runtime,
+                            VOICE_LANGUAGE: lang,
                             ...(phase === "preview"
                                 ? { VOICE_FORCE_LIGHT: "1", VOICE_PREVIEW: "1" }
                                 : {}),
@@ -710,7 +731,7 @@ export default function voiceMessage(host: Host, web: Web) {
                                             sample_rate: 16000,
                                         },
                                         target_streaming_delay_ms: 480,
-                                        language: "fr",
+                                        language: lang,
                                     },
                                 }),
                             );

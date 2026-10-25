@@ -60,7 +60,7 @@ def transcribe(model, name, device):
     started = time.perf_counter()
     segments, _ = model.transcribe(
         audio,
-        language="fr",
+        language=os.environ.get("VOICE_LANGUAGE", "fr"),
         beam_size=1 if os.environ.get("VOICE_PREVIEW") else 5,
         vad_filter=True,
         condition_on_previous_text=False,

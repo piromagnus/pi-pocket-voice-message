@@ -10,7 +10,27 @@ const ENGINE_KEY = "x.voice-message.engine";
 const MAX_BYTES = 700_000;
 const MAX_MS = 300_000;
 const PREVIEW_MS = 3_000;
-const engine = () => (localStorage.getItem(ENGINE_KEY) === "local" ? "local" : "mistral");
+const ENGINES = {
+    mistral: {
+        label: "Mistral · Voxtral Realtime 3 (live)",
+        about: "Words appear while you speak, then the whole recording is transcribed again when you stop. Audio goes to Mistral: $0.008/min live plus $0.0035/min for the correction, about $0.0115 per recorded minute on your API credits.",
+    },
+    "mistral-file": {
+        label: "Mistral · Voxtral Mini Transcribe 3 (after you stop)",
+        about: "Nothing appears until you stop, then the whole recording is transcribed once. Audio goes to Mistral: $0.0035/min on your API credits.",
+    },
+    local: {
+        label: "Local · Whisper",
+        about: "Short chunks appear while you speak, then the whole recording is transcribed again when you stop. Audio stays on this server: a GPU model when available, otherwise a small CPU model.",
+    },
+};
+
+/** The engine this browser uses. An unknown or missing choice means Mistral live, as the first choice always did. */
+const engine = () => {
+    const saved = localStorage.getItem(ENGINE_KEY);
+
+    return Object.hasOwn(ENGINES, saved) ? saved : "mistral";
+};
 
 export default function setup(pocket) {
     const { html, useState } = pocket;
@@ -140,7 +160,7 @@ export default function setup(pocket) {
             {
                 audio: btoa(parts.join("")),
                 mimeType: blob.type,
-                engine: each.engine,
+                engine: each.engine === "local" ? "local" : "mistral",
                 phase,
             },
             { signal: each.request.signal },
@@ -428,7 +448,7 @@ export default function setup(pocket) {
 
             if (each.engine === "mistral") {
                 startLive(each);
-            } else {
+            } else if (each.engine === "local") {
                 preview(each);
             }
         } catch (error) {
@@ -507,19 +527,13 @@ export default function setup(pocket) {
                     setValue(event.currentTarget.value);
                 }}
             >
-                <option value="mistral">Mistral · Voxtral Mini Transcribe 3</option>
-                <option value="local">Local · Whisper (adaptive)</option>
+                ${Object.entries(ENGINES).map(
+                    ([id, { label }]) => html`<option value=${id}>${label}</option>`,
+                )}
             </select>
+            <p class="muted small">${ENGINES[value].about}</p>
             <p class="muted small">
-                ${
-                    value === "mistral"
-                        ? "Audio goes to Mistral. The live preview ($0.008/min) plus the final pass ($0.0035/min) costs about $0.0115 per recorded minute on your API credits."
-                        : "Audio stays on this server. Whisper uses a GPU model when available, otherwise a small CPU model."
-                }
-            </p>
-            <p class="muted small">
-                Words appear while you speak. The full recording is transcribed again when you stop.
-                Your manual edits are never replaced.
+                Nothing is sent as a message, and your manual edits are never replaced.
             </p>
         </div>`;
     }

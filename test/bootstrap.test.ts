@@ -27,6 +27,9 @@ if (args[0] === "pip" && process.env.BOOTSTRAP_DELAY_INSTALL === "1") {
 
 async function setup() {
     const root = await mkdtemp(join(tmpdir(), "voice-bootstrap-"));
+    const lock = join(root, "requirements.lock");
+
+    await writeFile(lock, "faster-whisper==1.2.1\nav==19.0.2\n");
     const runtime = join(root, "runtime");
     const bin = join(root, "bin");
     const python = join(runtime, ".venv", "bin", "python");
@@ -56,6 +59,7 @@ async function setup() {
     return {
         root,
         runtime,
+        lock,
         python,
         log,
         state,
@@ -75,6 +79,16 @@ async function setup() {
     };
 }
 
+/** The marker is the lock file's own SHA-256. */
+async function lockHash(path: string): Promise<string> {
+    const crypto = await import("node:crypto");
+
+    return crypto
+        .createHash("sha256")
+        .update(await readFile(path))
+        .digest("hex");
+}
+
 async function calls(path: string): Promise<string[][]> {
     try {
         return (await readFile(path, "utf8"))
@@ -92,16 +106,16 @@ test("working venv writes the marker, then skips the import subprocess", async (
 
     try {
         assert.equal(
-            await ensureVenv(testEnv.runtime, new AbortController().signal),
+            await ensureVenv(testEnv.runtime, testEnv.lock, new AbortController().signal),
             testEnv.python,
         );
-        assert.match(
+        assert.equal(
             await readFile(join(testEnv.runtime, ".venv", ".ready"), "utf8"),
-            /faster-whisper==/,
+            await lockHash(testEnv.lock),
         );
         assert.equal((await calls(testEnv.log)).length, 1);
 
-        await ensureVenv(testEnv.runtime, new AbortController().signal);
+        await ensureVenv(testEnv.runtime, testEnv.lock, new AbortController().signal);
         assert.equal((await calls(testEnv.log)).length, 1);
     } finally {
         await testEnv.restore();
@@ -113,12 +127,18 @@ test("incomplete interpreter installs through uv, verifies imports, then marks r
 
     try {
         process.env.BOOTSTRAP_FAIL_FIRST_IMPORT = "1";
-        await ensureVenv(testEnv.runtime, new AbortController().signal);
+        await ensureVenv(testEnv.runtime, testEnv.lock, new AbortController().signal);
 
         const recorded = await calls(testEnv.log);
         assert.equal(recorded.filter((call) => call[0] === "uv" && call[1] === "pip").length, 1);
         assert.equal(recorded.filter((call) => call[0] === "python" && call[1] === "-c").length, 2);
-        assert.match(await readFile(join(testEnv.runtime, ".venv", ".ready"), "utf8"), /av==/);
+        assert.equal(
+            await readFile(join(testEnv.runtime, ".venv", ".ready"), "utf8"),
+            await lockHash(testEnv.lock),
+        );
+        const install = recorded.find((call) => call[0] === "uv" && call[1] === "pip");
+        assert.ok(install?.includes("--require-hashes"), "the install enforces the lock's hashes");
+        assert.ok(install?.at(-1) === testEnv.lock, "the install reads the lock file");
     } finally {
         await testEnv.restore();
     }
@@ -131,16 +151,16 @@ test("cancelled install leaves no marker and a later call recovers", async () =>
         process.env.BOOTSTRAP_FAIL_FIRST_IMPORT = "1";
         process.env.BOOTSTRAP_DELAY_INSTALL = "1";
         const controller = new AbortController();
-        const pending = ensureVenv(testEnv.runtime, controller.signal);
+        const pending = ensureVenv(testEnv.runtime, testEnv.lock, controller.signal);
         setTimeout(() => controller.abort(), 60);
         await assert.rejects(pending);
         await assert.rejects(readFile(join(testEnv.runtime, ".venv", ".ready")));
 
         delete process.env.BOOTSTRAP_DELAY_INSTALL;
-        await ensureVenv(testEnv.runtime, new AbortController().signal);
-        assert.match(
+        await ensureVenv(testEnv.runtime, testEnv.lock, new AbortController().signal);
+        assert.equal(
             await readFile(join(testEnv.runtime, ".venv", ".ready"), "utf8"),
-            /faster-whisper==/,
+            await lockHash(testEnv.lock),
         );
         assert.equal(
             (await calls(testEnv.log)).filter((call) => call[0] === "uv" && call[1] === "pip")
@@ -158,8 +178,8 @@ test("concurrent setup calls share one import and install sequence", async () =>
     try {
         process.env.BOOTSTRAP_FAIL_FIRST_IMPORT = "1";
         const [first, second] = await Promise.all([
-            ensureVenv(testEnv.runtime, new AbortController().signal),
-            ensureVenv(testEnv.runtime, new AbortController().signal),
+            ensureVenv(testEnv.runtime, testEnv.lock, new AbortController().signal),
+            ensureVenv(testEnv.runtime, testEnv.lock, new AbortController().signal),
         ]);
         assert.equal(first, testEnv.python);
         assert.equal(second, testEnv.python);

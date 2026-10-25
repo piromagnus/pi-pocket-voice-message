@@ -407,6 +407,73 @@ test("live Mistral dictation: words appear while speaking, the audio is the real
         );
         await owner$("live/cancel", { sessionId: "ffffffff-ffff-4fff-8fff-ffffffffffff" });
 
+        // 7. Audio settings lists every engine, remembers the choice, and "after you stop" streams nothing.
+        await run(`document.querySelector('.topbar [aria-label="Menu"]').click(); return 'null';`);
+        await until(
+            () =>
+                run(
+                    `return JSON.stringify([...document.querySelectorAll("button")].some((b) => b.textContent.includes("Audio settings")));`,
+                ),
+            "the Audio settings row",
+        );
+        await run(
+            `[...document.querySelectorAll("button")].find((b) => b.textContent.includes("Audio settings")).click(); return 'null';`,
+        );
+        await wait(".voice-settings select");
+        const options = await run(
+            `return JSON.stringify([...document.querySelectorAll(".voice-settings option")].map((o) => [o.value, o.textContent]));`,
+        );
+
+        assert.deepEqual(options, [
+            ["mistral", "Mistral · Voxtral Realtime 3 (live)"],
+            ["mistral-file", "Mistral · Voxtral Mini Transcribe 3 (after you stop)"],
+            ["local", "Local · Whisper"],
+        ]);
+        assert.equal(
+            await run(
+                `return JSON.stringify(document.querySelector(".voice-settings select").value);`,
+            ),
+            "mistral",
+            "live is the default",
+        );
+        await run(`
+            const select = document.querySelector(".voice-settings select");
+            select.value = "mistral-file"; select.dispatchEvent(new Event("change", { bubbles: true })); return 'null';
+        `);
+        assert.equal(
+            await run(`return JSON.stringify(localStorage.getItem("x.voice-message.engine"));`),
+            "mistral-file",
+        );
+        assert.match(
+            await run(
+                `return JSON.stringify(document.querySelector(".voice-settings p").textContent);`,
+            ),
+            /Nothing appears until you stop/,
+        );
+        await run(
+            `document.querySelector('[aria-label="Close"], .sheet-close')?.click(); return 'null';`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        const sessions = mistral.state.connections;
+
+        await run(`
+            const box = document.querySelector('${field}'); box.value = 'Draft:'; box.dispatchEvent(new Event('input', { bubbles: true }));
+            globalThis.finished = false; finals.length = 0; return 'null';
+        `);
+        await tap("Dictate a message");
+        await wait('[title="Stop dictation"]');
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        assert.equal(await value(), "Draft:", "nothing appears while recording in this mode");
+        await tap("Stop dictation");
+        await until(
+            async () => (await value()) === `Draft: ${FINAL}`,
+            "the single transcription",
+            30_000,
+        );
+        assert.equal(mistral.state.connections, sessions, "no live session was opened");
+        assert.deepEqual(await run("return JSON.stringify(finals);"), ["final"]);
+
         assert.equal(
             await run("return JSON.stringify(document.documentElement.scrollWidth <= innerWidth);"),
             true,
