@@ -4,13 +4,13 @@ Tap the microphone beside the message box and speak. A live preview appears in t
 
 ## Audio settings
 
-Pick an engine in **Menu → Audio settings**. The choice stays in this browser, and Mistral live is the default.
+The engine and the language are chosen on the **Audio settings** page, opened from the rail on the left, like Providers. The choices stay in this browser, and Mistral live is the default engine.
 
 - **Mistral · Voxtral Realtime 3 (live)**: words appear while you speak, streamed by `voxtral-mini-transcribe-realtime-3`. When you stop, `voxtral-mini-transcribe-3-0` transcribes the whole recording once more and corrects the text. French is pinned. At the published rates ($0.008/min realtime plus $0.0035/min for the correction) this costs about **$0.0115 per recorded minute** (provider billing rules apply). Audio is sent to Mistral. The key stays on the server: `MISTRAL_API_KEY`, or Pi's `mistral` API-key entry in `auth.json`. Credential commands are never executed. No OpenRouter, automatic retry, or automatic provider fallback.
 - **Mistral · Voxtral Mini Transcribe 3 (after you stop)**: nothing appears while you speak; the whole recording is transcribed once, at **$0.0035/min**. The cheapest cloud option, and the one that opens no live session.
 - **Local · Whisper**: short chunks appear while you speak (Whisper small on CPU, with faster decoding), then the whole recording is transcribed again when you stop with **large-v3-turbo on CUDA** when installed and available, otherwise Whisper small on CPU. No cloud API call or per-minute fee. Audio stays on the Pi Pocket server; CPU/GPU and electricity are still needed.
 
-The interface and errors are in English. Speech recognition is pinned to **French**; set `VOICE_MESSAGE_LANGUAGE` (ISO 639, such as `en` or `de`) on the server to transcribe another language. It applies to the live session, the file pass, and the local engine.
+The interface and errors are in English. The transcription language is a choice on the same page, **auto by default**: each engine detects it from the speech. The local 3-second preview chunks can rarely misjudge a language on auto; the final pass over the whole recording corrects it. A server-wide default for every browser can be set in `_voice-message/config.json` (machine-local, never part of the gallery entry), for example `{"gpu": 0, "language": "fr"}`; a browser's own choice wins over it.
 
 ## How live preview works
 

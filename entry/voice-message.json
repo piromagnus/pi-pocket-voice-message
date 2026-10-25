@@ -1,7 +1,7 @@
 {
  "name": "voice-message",
  "title": "Voice message",
- "description": "Dictate a message: words appear in the message box while you speak and a full pass corrects them when you stop; nothing is sent automatically and your edits are never overwritten. Mistral engines send audio to api.mistral.ai (Voxtral Realtime 3, then Mini Transcribe 3; key read only on the server from MISTRAL_API_KEY or Pi's mistral auth.json entry). Local Whisper keeps audio on the server; its first use installs pinned packages from PyPI with enforced hashes and the revision-pinned Whisper small model from huggingface.co, about 900 MB. French is pinned; VOICE_MESSAGE_LANGUAGE overrides.",
+ "description": "Dictate a message: words appear while you speak and a full pass corrects them when you stop; nothing is sent automatically and your edits are never overwritten. Mistral engines send audio to api.mistral.ai (Voxtral Realtime 3, then Mini Transcribe 3; key only on the server from MISTRAL_API_KEY or Pi's mistral auth.json entry). Local Whisper keeps audio on the server; its first use installs pinned packages from PyPI with enforced hashes and the revision-pinned Whisper small model from huggingface.co, ~900 MB. Engine and language (auto by default) are chosen on the Audio settings page.",
  "tags": [
   "voice",
   "dictation",
@@ -13,7 +13,7 @@
   "name": "piromagnus",
   "github": "piromagnus"
  },
- "version": "1.3.0",
+ "version": "1.4.0",
  "source": {
   "repo": "piromagnus/pi-pocket-voice-message",
   "commit": "ef3c58789956af959dce5aef3bae3d5ffef38985",

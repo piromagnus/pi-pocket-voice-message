@@ -311,8 +311,8 @@ test("live Mistral dictation: words appear while speaking, the audio is the real
         assert.deepEqual(mistral.state.update, {
             audio_format: { encoding: "pcm_s16le", sample_rate: 16000 },
             target_streaming_delay_ms: 480,
-            language: "fr",
         });
+        assert.equal("language" in mistral.state.update, false, "auto pins nothing");
         assert.equal(mistral.state.ended, true, "the session was ended, not just dropped");
         assert.deepEqual(
             await run("return JSON.stringify(finals);"),
@@ -407,21 +407,29 @@ test("live Mistral dictation: words appear while speaking, the audio is the real
         );
         await owner$("live/cancel", { sessionId: "ffffffff-ffff-4fff-8fff-ffffffffffff" });
 
-        // 7. Audio settings lists every engine, remembers the choice, and "after you stop" streams nothing.
-        await run(`document.querySelector('.topbar [aria-label="Menu"]').click(); return 'null';`);
+        // 7. Audio settings is a page in the rail, like Providers: no menu, no sheet.
+        await page.setViewport({ width: 1280, height: 800, scale: 1, mobile: false });
         await until(
             () =>
                 run(
-                    `return JSON.stringify([...document.querySelectorAll("button")].some((b) => b.textContent.includes("Audio settings")));`,
+                    `return JSON.stringify([...document.querySelectorAll('[data-part~="rail-button"]')].some((b) => b.getAttribute("title") === "Audio settings" || b.getAttribute("aria-label") === "Audio settings"));`,
                 ),
-            "the Audio settings row",
+            "the Audio settings rail button",
         );
         await run(
-            `[...document.querySelectorAll("button")].find((b) => b.textContent.includes("Audio settings")).click(); return 'null';`,
+            `[...document.querySelectorAll('[data-part~="rail-button"]')].find((b) => b.getAttribute("title") === "Audio settings" || b.getAttribute("aria-label") === "Audio settings").click(); return 'null';`,
+        );
+        await until(
+            () =>
+                run(
+                    `return JSON.stringify(!!document.querySelector('[data-part="extension-page"][data-module="voice-message"]'));`,
+                ),
+            "the Audio settings page",
         );
         await wait(".voice-settings select");
+        await page.setViewport({ width: 390, height: 844, scale: 1, mobile: true });
         const options = await run(
-            `return JSON.stringify([...document.querySelectorAll(".voice-settings option")].map((o) => [o.value, o.textContent]));`,
+            `return JSON.stringify([...document.querySelectorAll("#voice-settings-engine option")].map((o) => [o.value, o.textContent]));`,
         );
 
         assert.deepEqual(options, [
@@ -431,13 +439,26 @@ test("live Mistral dictation: words appear while speaking, the audio is the real
         ]);
         assert.equal(
             await run(
-                `return JSON.stringify(document.querySelector(".voice-settings select").value);`,
+                `return JSON.stringify(document.querySelector("#voice-settings-engine").value);`,
             ),
             "mistral",
             "live is the default",
         );
+        const languages = await run(
+            `return JSON.stringify([...document.querySelectorAll("#voice-settings-language option")].map((o) => [o.value, o.textContent]));`,
+        );
+
+        assert.deepEqual(languages[0], ["auto", "Auto (detect)"]);
+        assert.equal(languages[1][0], "fr");
+        assert.equal(
+            await run(
+                `return JSON.stringify(document.querySelector("#voice-settings-language").value);`,
+            ),
+            "auto",
+            "the language detects by default",
+        );
         await run(`
-            const select = document.querySelector(".voice-settings select");
+            const select = document.querySelector("#voice-settings-engine");
             select.value = "mistral-file"; select.dispatchEvent(new Event("change", { bubbles: true })); return 'null';
         `);
         assert.equal(
@@ -450,11 +471,48 @@ test("live Mistral dictation: words appear while speaking, the audio is the real
             ),
             /Nothing appears until you stop/,
         );
-        await run(
-            `document.querySelector('[aria-label="Close"], .sheet-close')?.click(); return 'null';`,
+        // The owner picks French: the next realtime session pins it.
+        await run(`
+            const select = document.querySelector("#voice-settings-language");
+            select.value = "fr"; select.dispatchEvent(new Event("change", { bubbles: true })); return 'null';
+        `);
+        assert.equal(
+            await run(`return JSON.stringify(localStorage.getItem("x.voice-message.language"));`),
+            "fr",
         );
+        await run(`history.back(); return 'null';`);
         await new Promise((resolve) => setTimeout(resolve, 600));
 
+        // The French choice reaches the next realtime session.
+        mistral.state.connections = 0;
+        mistral.state.update = null;
+        await run(`localStorage.setItem('x.voice-message.engine', 'mistral'); return 'null';`);
+        await run(`
+            const box = document.querySelector('${field}'); box.value = 'Draft:'; box.dispatchEvent(new Event('input', { bubbles: true }));
+            globalThis.finished = false; return 'null';
+        `);
+        await tap("Dictate a message");
+        await until(
+            async () => mistral.state.connections > 0,
+            "a live session with the pinned language",
+            15_000,
+        );
+        await wait('[title="Stop dictation"]');
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        assert.equal(mistral.state.update.language, "fr");
+        assert.ok(mistral.state.pcm.length > 0, "real audio reached Mistral");
+        await tap("Stop dictation");
+        await until(
+            async () => (await value()) === `Draft: ${FINAL}`,
+            "the corrected draft",
+            30_000,
+        );
+
+        mistral.state.update = null;
+        mistral.state.connections = 0;
+
+        // Back to "after you stop" for the rest of the run.
+        await run(`localStorage.setItem('x.voice-message.engine', 'mistral-file'); return 'null';`);
         const sessions = mistral.state.connections;
 
         await run(`

@@ -67,6 +67,14 @@ test("light engine: the small model transcribes French on CPU", { skip }, async 
     assert.equal(parsed.text, REFERENCE);
 });
 
+test("auto detects the language: the French clip needs no pin", { skip }, async () => {
+    const result = await transcribe({ VOICE_LANGUAGE: "auto" }, french);
+    const parsed = JSON.parse(result.output);
+
+    assert.equal(result.code, 0);
+    assert.equal(parsed.text, REFERENCE);
+});
+
 test("the light engine still enforces the audio limits", { skip }, async () => {
     assert.equal((await transcribe({ VOICE_FORCE_LIGHT: "1" }, Buffer.alloc(8, 65))).code, 2);
 });

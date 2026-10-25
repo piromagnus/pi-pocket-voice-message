@@ -13,6 +13,7 @@ test("Mistral: saved key, exact model, no retries, safe errors, cancellation and
     let route: (request: any) => Promise<any>;
     let dispose: () => void;
     let calls = 0;
+    let expectedLanguage: string | null = null;
     let responder = async (_init: RequestInit) =>
         new Response(JSON.stringify({ text: "Bonjour Pierre." }));
     const web = {
@@ -30,12 +31,14 @@ test("Mistral: saved key, exact model, no retries, safe errors, cancellation and
             return Object.assign(new Error(message), { status });
         },
     };
-    const request = (signal = new AbortController().signal) => ({
+
+    const request = (signal: AbortSignal = new AbortController().signal, language?: string) => ({
         signal,
         body: {
             audio: Buffer.alloc(32, 65).toString("base64"),
             mimeType: "audio/wav",
             engine: "mistral",
+            ...(language === undefined ? {} : { language }),
         },
     });
 
@@ -59,17 +62,23 @@ test("Mistral: saved key, exact model, no retries, safe errors, cancellation and
             const form = init?.body as FormData;
 
             assert.equal(form.get("model"), "voxtral-mini-transcribe-3-0");
-            assert.equal(form.get("language"), "fr");
+            assert.equal(form.get("language"), expectedLanguage);
             assert.equal((form.get("file") as File).size, 32);
             assert.ok(init?.signal);
 
             return responder(init!);
         }) as typeof fetch;
-        assert.deepEqual(await route!(request()), {
+        await assert.rejects(
+            route!(request(new AbortController().signal, "not-a-language")),
+            (e: any) => e.status === 400,
+        );
+        expectedLanguage = "fr";
+        assert.deepEqual(await route!(request(new AbortController().signal, "fr")), {
             text: "Bonjour Pierre.",
             model: "voxtral-mini-transcribe-3-0",
             local: false,
         });
+        expectedLanguage = null;
         assert.equal(calls, 1);
         responder = async () => new Response("secret-provider-body", { status: 429 });
         await assert.rejects(

@@ -7,6 +7,24 @@ const MIC =
     "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8";
 const STOP = "M7 7h10v10H7z";
 const ENGINE_KEY = "x.voice-message.engine";
+const LANGUAGE_KEY = "x.voice-message.language";
+/** The languages a recording can be pinned to, as Audio settings offers them. */
+const LANGUAGES = [
+    ["auto", "Auto (detect)"],
+    ["fr", "French"],
+    ["en", "English"],
+    ["de", "German"],
+    ["es", "Spanish"],
+    ["it", "Italian"],
+    ["pt", "Portuguese"],
+    ["nl", "Dutch"],
+    ["ar", "Arabic"],
+    ["ru", "Russian"],
+    ["zh", "Chinese"],
+    ["ja", "Japanese"],
+    ["ko", "Korean"],
+    ["hi", "Hindi"],
+];
 const MAX_BYTES = 700_000;
 const MAX_MS = 300_000;
 const PREVIEW_MS = 3_000;
@@ -30,6 +48,13 @@ const engine = () => {
     const saved = localStorage.getItem(ENGINE_KEY);
 
     return Object.hasOwn(ENGINES, saved) ? saved : "mistral";
+};
+
+/** The language this browser dictates in. Auto lets each engine detect it from the speech. */
+const language = () => {
+    const saved = localStorage.getItem(LANGUAGE_KEY);
+
+    return saved !== null && /^(auto|[a-z]{2,3})$/.test(saved) ? saved : "auto";
 };
 
 export default function setup(pocket) {
@@ -161,6 +186,7 @@ export default function setup(pocket) {
                 audio: btoa(parts.join("")),
                 mimeType: blob.type,
                 engine: each.engine === "local" ? "local" : "mistral",
+                language: each.language,
                 phase,
             },
             { signal: each.request.signal },
@@ -210,6 +236,7 @@ export default function setup(pocket) {
     /** Mistral's live transcription: words arrive while the person speaks, with no chunk boundaries. */
     function startLive(each) {
         each.live = createLive(pocket, {
+            language: each.language,
             onText: (text) => {
                 if (valid(each) && text) {
                     each.previewText = text;
@@ -373,6 +400,7 @@ export default function setup(pocket) {
             conversationId,
             box,
             engine: engine(),
+            language: language(),
             request: new AbortController(),
             stream: null,
             recorder: null,
@@ -515,23 +543,39 @@ export default function setup(pocket) {
     document.addEventListener("keydown", sendKey, true);
 
     function AudioSettings() {
-        const [value, setValue] = useState(engine);
+        const [engineValue, setEngine] = useState(engine);
+        const [languageValue, setLanguage] = useState(language);
 
         return html`<div class="voice-settings">
             <label for="voice-settings-engine">Transcription model</label>
             <select
                 id="voice-settings-engine"
-                value=${value}
+                value=${engineValue}
                 onChange=${(event) => {
                     localStorage.setItem(ENGINE_KEY, event.currentTarget.value);
-                    setValue(event.currentTarget.value);
+                    setEngine(event.currentTarget.value);
                 }}
             >
                 ${Object.entries(ENGINES).map(
                     ([id, { label }]) => html`<option value=${id}>${label}</option>`,
                 )}
             </select>
-            <p class="muted small">${ENGINES[value].about}</p>
+            <p class="muted small">${ENGINES[engineValue].about}</p>
+            <label for="voice-settings-language">Transcription language</label>
+            <select
+                id="voice-settings-language"
+                value=${languageValue}
+                onChange=${(event) => {
+                    localStorage.setItem(LANGUAGE_KEY, event.currentTarget.value);
+                    setLanguage(event.currentTarget.value);
+                }}
+            >
+                ${LANGUAGES.map(([id, label]) => html`<option value=${id}>${label}</option>`)}
+            </select>
+            <p class="muted small">
+                Auto lets each engine detect it from the speech. Short local preview chunks can
+                rarely misjudge a language; the full pass, on the whole recording, corrects it.
+            </p>
             <p class="muted small">
                 Nothing is sent as a message, and your manual edits are never replaced.
             </p>
@@ -539,8 +583,13 @@ export default function setup(pocket) {
     }
 
     pocket.style("style.css");
-    pocket.sheet({ id: "audio-settings", title: "Audio settings", component: AudioSettings });
-    pocket.menu({ id: "audio-settings", label: "Audio settings", sheet: "audio-settings" });
+    pocket.page({ id: "audio-settings", title: "Audio settings", component: AudioSettings });
+    pocket.rail({
+        id: "audio-settings",
+        title: "Audio settings",
+        iconPath: MIC,
+        page: "audio-settings",
+    });
     button = pocket.composerButton({
         id: "dictate",
         title: "Dictate a message",

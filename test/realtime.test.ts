@@ -122,6 +122,7 @@ test("Realtime: happy path deltas, ordering, completion, user isolation", async 
         const startRoute = harness.routes.get("POST live/start")!;
         const audioRoute = harness.routes.get("POST live/audio")!;
         const endRoute = harness.routes.get("POST live/end")!;
+        const cancelRoute = harness.routes.get("POST live/cancel")!;
 
         const sessionId = "12345678-1234-1234-1234-123456789abc";
         const userA = { id: "user-alpha" };
@@ -135,8 +136,8 @@ test("Realtime: happy path deltas, ordering, completion, user isolation", async 
         assert.deepEqual(receivedSessionUpdate, {
             audio_format: { encoding: "pcm_s16le", sample_rate: 16000 },
             target_streaming_delay_ms: 480,
-            language: "fr",
         });
+        assert.equal("language" in receivedSessionUpdate, false, "auto pins nothing");
 
         // Send audio chunk seq: 0
         const audioBase64 = Buffer.alloc(100, 1).toString("base64");
@@ -168,6 +169,23 @@ test("Realtime: happy path deltas, ordering, completion, user isolation", async 
             user: userA,
         });
         assert.deepEqual(endRes, { text: "Bonjour monde" });
+
+        // A language that is not a code is refused; the browser's choice reaches the next session.
+        await assert.rejects(
+            startRoute({
+                body: { sessionId: "99999999-9999-4999-8999-999999999999", language: "français" },
+                user: userA,
+            }),
+            (error: any) => error.status === 400,
+        );
+        const pinned = "01234567-89ab-4cde-8abc-0123456789ab";
+
+        assert.deepEqual(
+            await startRoute({ body: { sessionId: pinned, language: "fr" }, user: userA }),
+            { ok: true },
+        );
+        assert.equal(receivedSessionUpdate.language, "fr");
+        await cancelRoute({ body: { sessionId: pinned }, user: userA });
     } finally {
         if (oldEnvUrl !== undefined) process.env.VOICE_MESSAGE_REALTIME_URL = oldEnvUrl;
         else delete process.env.VOICE_MESSAGE_REALTIME_URL;

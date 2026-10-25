@@ -1,4 +1,4 @@
-/** Dictate a message: words appear in the message box while you speak and a full pass corrects them when you stop; nothing is sent automatically and your edits are never overwritten. Mistral engines send audio to api.mistral.ai (Voxtral Realtime 3, then Mini Transcribe 3; key read only on the server from MISTRAL_API_KEY or Pi's mistral auth.json entry). Local Whisper keeps audio on the server; its first use installs pinned packages from PyPI with enforced hashes and the revision-pinned Whisper small model from huggingface.co, about 900 MB. French is pinned; VOICE_MESSAGE_LANGUAGE overrides. */ import {
+/** Dictate a message: words appear while you speak and a full pass corrects them when you stop; nothing is sent automatically and your edits are never overwritten. Mistral engines send audio to api.mistral.ai (Voxtral Realtime 3, then Mini Transcribe 3; key only on the server from MISTRAL_API_KEY or Pi's mistral auth.json entry). Local Whisper keeps audio on the server; its first use installs pinned packages from PyPI with enforced hashes and the revision-pinned Whisper small model from huggingface.co, ~900 MB. Engine and language (auto by default) are chosen on the Audio settings page. */ import {
     spawn,
     type ChildProcess,
 } from "node:child_process";
@@ -252,19 +252,38 @@ async function mistralKey(agentDir: string): Promise<string> {
     return configured;
 }
 
-/** The transcription language: ISO 639 (2 or 3 lowercase letters), French by default. */
-function language(): string {
-    const value = process.env.VOICE_MESSAGE_LANGUAGE?.trim().toLowerCase();
-
-    return /^[a-z]{2,3}$/.test(value ?? "") ? value! : "fr";
-}
-
 export default function voiceMessage(host: Host, web: Web) {
     const moduleDir = dirname(fileURLToPath(import.meta.url));
     const runtime = join(moduleDir, "_voice-message");
     const script = join(moduleDir, "voice-message", "transcribe.py");
     const lock = join(moduleDir, "voice-message", "requirements.lock");
-    const lang = language();
+
+    /**
+     * The language for one request: what the browser's Audio settings chose, else the machine's own
+     * `_voice-message/config.json` (a gallery install has neither, so `auto`). `auto` lets each engine detect it.
+     */
+    const language = (chosen: unknown): string => {
+        if (typeof chosen === "string" && /^(auto|[a-z]{2,3})$/.test(chosen)) {
+            return chosen;
+        }
+
+        try {
+            const config = JSON.parse(readFileSync(join(runtime, "config.json"), "utf8")) as {
+                language?: unknown;
+            };
+
+            if (
+                typeof config.language === "string" &&
+                /^(auto|[a-z]{2,3})$/.test(config.language)
+            ) {
+                return config.language;
+            }
+        } catch {
+            // No config: auto.
+        }
+
+        return "auto";
+    };
     const disposed = new AbortController();
     let running: ChildProcess | null = null;
     let busy = false;
@@ -289,6 +308,10 @@ export default function voiceMessage(host: Host, web: Web) {
 
             if (engine !== "local" && engine !== "mistral") {
                 throw web.error(400, "Invalid transcription engine.");
+            }
+
+            if (body.language !== undefined && !/^(auto|[a-z]{2,3})$/.test(String(body.language))) {
+                throw web.error(400, "Invalid language.");
             }
 
             if (
@@ -355,7 +378,10 @@ export default function voiceMessage(host: Host, web: Web) {
                         }),
                     );
                     form.set("model", MISTRAL_MODEL);
-                    form.set("language", lang);
+
+                    if (language(body.language) !== "auto") {
+                        form.set("language", language(body.language));
+                    }
 
                     let response: Response;
 
@@ -486,7 +512,7 @@ export default function voiceMessage(host: Host, web: Web) {
                         env: {
                             ...process.env,
                             VOICE_RUNTIME: runtime,
-                            VOICE_LANGUAGE: lang,
+                            VOICE_LANGUAGE: language(body.language),
                             ...(phase === "preview"
                                 ? { VOICE_FORCE_LIGHT: "1", VOICE_PREVIEW: "1" }
                                 : {}),
@@ -594,6 +620,10 @@ export default function voiceMessage(host: Host, web: Web) {
                 )
             ) {
                 throw web.error(400, "Invalid session ID.");
+            }
+
+            if (body.language !== undefined && !/^(auto|[a-z]{2,3})$/.test(String(body.language))) {
+                throw web.error(400, "Invalid language.");
             }
 
             if (busy || currentLiveSession !== null) {
@@ -731,7 +761,9 @@ export default function voiceMessage(host: Host, web: Web) {
                                             sample_rate: 16000,
                                         },
                                         target_streaming_delay_ms: 480,
-                                        language: lang,
+                                        ...(language(body.language) === "auto"
+                                            ? {}
+                                            : { language: language(body.language) }),
                                     },
                                 }),
                             );

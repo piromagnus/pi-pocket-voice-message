@@ -24,7 +24,7 @@ function encode(bytes) {
  * One live session. `onText(text)` hears the whole transcript so far, each time it grows. `onFail()` is called at most
  * once, when the live preview cannot go on; the recording itself is never touched.
  */
-export function createLive(pocket, { onText, onFail }) {
+export function createLive(pocket, { language, onText, onFail }) {
     const id = crypto.randomUUID();
     let context = null;
     let node = null;
@@ -154,7 +154,7 @@ export function createLive(pocket, { onText, onFail }) {
         /** Start the server's session and the capture together: audio recorded while the session opens is kept. */
         async start(stream) {
             stopEvents = pocket.on("live", hear);
-            ready = pocket.api("live/start", { sessionId: id });
+            ready = pocket.api("live/start", { sessionId: id, language });
             // Never an unhandled rejection: the sender below reads `ready` and gives the failure its one report.
             ready.catch(() => give("start"));
 

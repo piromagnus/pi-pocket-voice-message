@@ -18,6 +18,10 @@ MAX_SAMPLES = 16_000 * 310
 SMALL_PIN = "536b0662742c02347bc0e980a01041f333bce120"
 
 
+# "auto" leaves the language to Whisper's own detection; without the variable, French.
+LANG = None if os.environ.get("VOICE_LANGUAGE", "fr") == "auto" else os.environ.get("VOICE_LANGUAGE", "fr")
+
+
 def answer(value, code=0):
     print(json.dumps(value, ensure_ascii=False), flush=True)
     raise SystemExit(code)
@@ -60,7 +64,7 @@ def transcribe(model, name, device):
     started = time.perf_counter()
     segments, _ = model.transcribe(
         audio,
-        language=os.environ.get("VOICE_LANGUAGE", "fr"),
+        language=LANG,
         beam_size=1 if os.environ.get("VOICE_PREVIEW") else 5,
         vad_filter=True,
         condition_on_previous_text=False,
